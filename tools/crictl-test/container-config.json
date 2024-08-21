@@ -1,0 +1,19 @@
+{
+  "metadata": {
+    "name": "nginx-container",
+    "attempt": 1
+  },
+  "image": {
+    "image": "nginx"
+  },
+  "command": [
+    "nginx",
+    "-g",
+    "daemon off;"
+  ],
+  "log_path": "nginx.log",
+  "stdin": true,
+  "stdin_once": true,
+  "tty": true,
+  "linux": {}
+}
