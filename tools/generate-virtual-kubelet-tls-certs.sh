@@ -1,9 +1,19 @@
 #!/bin/bash -e
 
-kubectl delete csr virtual-kubelet-csr
+kubectl delete csr virtual-kubelet-csr || true
 
 # Ensure running in the directory containing the cfssl configuration
 cd "$(dirname "$0")"
+
+# Input Parameters
+NODE_NAME=$1
+IP_ADDRESS=$2
+
+# Validate Parameters
+if [ -z "$NODE_NAME" ] || [ -z "$IP_ADDRESS" ]; then
+  echo "Usage: $0 <Node Name> <IP Address> <Config JSON Output File>"
+  exit 1
+fi
 
 # Variables
 PROFILE="kubelet"  # Name of the profile to use in CSR generation
@@ -14,9 +24,11 @@ CSR_FILE="virtual-kubelet.csr"
 CRT_FILE="virtual-kubelet.crt"
 
 # Step 1: Create a CSR configuration file
+
+# Step 1: Create a CSR configuration file
 cat > ${CONFIG_JSON} <<EOF
 {
-    "CN": "system:node:mac-m1",
+    "CN": "system:node:${NODE_NAME}",
     "key": {
         "algo": "rsa",
         "size": 2048
@@ -29,11 +41,13 @@ cat > ${CONFIG_JSON} <<EOF
         "OU": ""
     }],
     "hosts": [
-      "192.168.1.99",
+      "${IP_ADDRESS}",
       "localhost"
     ]
 }
 EOF
+
+echo "CSR configuration file created at ${CONFIG_JSON} for Node: ${NODE_NAME}, IP: ${IP_ADDRESS}"
 
 # Step 2: Generate the CSR and key
 cfssl genkey ${CONFIG_JSON} | cfssljson -bare ${CSR_NAME}
