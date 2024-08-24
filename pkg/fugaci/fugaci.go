@@ -12,6 +12,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"runtime"
 	"sync"
 
 	"log"
@@ -193,7 +194,7 @@ func (s *FugaciProvider) NodeDaemonEndpoints(ctx context.Context) *v1.NodeDaemon
 
 // OperatingSystem returns the operating system the provider runs on
 func (s *FugaciProvider) OperatingSystem() string {
-	return "darwin"
+	return runtime.GOOS
 }
 
 // RunInContainer executes a command in a container in the pod, copying data
