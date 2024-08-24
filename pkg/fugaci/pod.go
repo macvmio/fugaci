@@ -3,9 +3,14 @@ package fugaci
 import (
 	"context"
 	"encoding/json"
+	io_prometheus_client "github.com/prometheus/client_model/go"
 	"github.com/virtual-kubelet/node-cli/manager"
 	"github.com/virtual-kubelet/virtual-kubelet/errdefs"
 	vknode "github.com/virtual-kubelet/virtual-kubelet/node"
+	"github.com/virtual-kubelet/virtual-kubelet/node/api"
+	"github.com/virtual-kubelet/virtual-kubelet/node/api/statsv1alpha1"
+	"github.com/virtual-kubelet/virtual-kubelet/node/nodeutil"
+	"io"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"log"
@@ -13,6 +18,7 @@ import (
 )
 
 var _ vknode.PodLifecycleHandler = (*Provider)(nil)
+var __ nodeutil.Provider = (*Provider)(nil)
 
 type Provider struct {
 	resourceManager *manager.ResourceManager
@@ -148,7 +154,49 @@ func (s *Provider) GetPodStatus(ctx context.Context, namespace, name string) (*v
 	return &pod.Status, nil
 }
 
+// GetPods returns a list of dummy Pods to satisfy the provider interface
+func (s *Provider) GetPods(ctx context.Context) ([]*v1.Pod, error) {
+	log.Printf("Getting all Pods on node %s", s.cfg.NodeName)
+	// Return a list of pods or empty list
+	return []*v1.Pod{}, nil
+}
+
+func (s *Provider) ConfigureNode(ctx context.Context, node *v1.Node) {
+	n := NewNode(s.cfg)
+	n.Configure(node)
+}
+
 // TODO:
 //func (s *Provider) NotifyPods(ctx context.Context, cb func(*v1.Pod)) {
 //	log.Printf("Notifying pods on node %s", s.nodeName)
 //}
+
+func (s *Provider) GetContainerLogs(ctx context.Context, namespace, podName, containerName string, opts api.ContainerLogOpts) (io.ReadCloser, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (s *Provider) RunInContainer(ctx context.Context, namespace, podName, containerName string, cmd []string, attach api.AttachIO) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (s *Provider) AttachToContainer(ctx context.Context, namespace, podName, containerName string, attach api.AttachIO) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (s *Provider) GetStatsSummary(ctx context.Context) (*statsv1alpha1.Summary, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (s *Provider) GetMetricsResource(ctx context.Context) ([]*io_prometheus_client.MetricFamily, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (s *Provider) PortForward(ctx context.Context, namespace, pod string, port int32, stream io.ReadWriteCloser) error {
+	//TODO implement me
+	panic("implement me")
+}

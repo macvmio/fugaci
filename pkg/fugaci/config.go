@@ -3,6 +3,10 @@ package fugaci
 type Config struct {
 	NodeName       string
 	KubeConfigPath string
-	// TODO: Taints
+	LogLevel       string
 
+	TLS struct {
+		KeyPath  string
+		CertPath string
+	}
 }

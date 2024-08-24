@@ -1,19 +1,24 @@
 package cmd
 
 import (
+	"crypto/tls"
+	"flag"
+	"fmt"
+	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"github.com/tomekjarosik/fugaci/pkg/bootstrap"
 	"github.com/tomekjarosik/fugaci/pkg/fugaci"
 	"github.com/tomekjarosik/fugaci/pkg/k8s"
+	"github.com/virtual-kubelet/virtual-kubelet/log"
+	logruslogger "github.com/virtual-kubelet/virtual-kubelet/log/logrus"
+	"github.com/virtual-kubelet/virtual-kubelet/node"
 	"github.com/virtual-kubelet/virtual-kubelet/node/nodeutil"
-	"k8s.io/client-go/informers"
-	"log"
-	"sync"
-	"time"
+	"k8s.io/klog/v2"
+	"net/http"
 )
 
 func NewCmdServe() *cobra.Command {
+	viper.SetDefault("LogLevel", "info")
 	var serveCommand = &cobra.Command{
 		Use:   "serve",
 		Short: "Start Fugaci provider for virtual-kubelet",
@@ -22,65 +27,69 @@ func NewCmdServe() *cobra.Command {
 		Run: func(cmd *cobra.Command, args []string) {
 			var cfg fugaci.Config
 			if err := viper.Unmarshal(&cfg); err != nil {
-				log.Fatalf("Unable to decode into struct, %v", err)
+				fmt.Printf("Unable to decode into struct, %v", err)
+				return
+			}
+			fmt.Printf("Starting Fugaci provider with config: %+v", cfg)
+
+			logger := logrus.StandardLogger()
+			lvl, err := logrus.ParseLevel(cfg.LogLevel)
+			if err != nil {
+				logrus.WithError(err).Fatal("Error parsing log level")
+			}
+			logger.SetLevel(lvl)
+
+			ctx := log.WithLogger(cmd.Context(), logruslogger.FromLogrus(logrus.NewEntry(logger)))
+
+			k8sClient, err := k8s.NewClient(cfg.KubeConfigPath)
+			if err != nil {
+				log.G(ctx).Fatal(err)
 				return
 			}
 
-			client, err := k8s.NewClient(cfg.KubeConfigPath)
+			providerFunc := func(pConfig nodeutil.ProviderConfig) (nodeutil.Provider, node.NodeProvider, error) {
+				p, err := fugaci.NewProvider(cfg)
+				if err != nil {
+					return nil, nil, err
+				}
+				p.ConfigureNode(cmd.Context(), pConfig.Node)
+				return p, node.NewNaiveNodeProvider(), nil
+			}
+			configureRoutes := func(cfg *nodeutil.NodeConfig) error {
+				mux := http.NewServeMux()
+				cfg.Handler = mux
+				return nodeutil.AttachProviderRoutes(mux)(cfg)
+			}
+			withNoClientCertFunc := func(config *tls.Config) error {
+				config.ClientAuth = tls.NoClientCert
+				return nil
+			}
+			vkNode, err := nodeutil.NewNode(cfg.NodeName,
+				providerFunc,
+				configureRoutes,
+				nodeutil.WithClient(k8sClient),
+				nodeutil.WithTLSConfig(nodeutil.WithKeyPairFromPath(cfg.TLS.CertPath, cfg.TLS.KeyPath), withNoClientCertFunc),
+			)
 			if err != nil {
-				log.Fatalf("Failed to create client: %v", err)
+				log.G(ctx).Fatal(err)
 				return
 			}
-
-			// Create a shared informer factory with a default resync period
-			informerFactory := informers.NewSharedInformerFactory(client, 30*time.Second)
-
-			provider, err := fugaci.NewProvider(cfg)
+			err = vkNode.Run(cmd.Context())
 			if err != nil {
-				log.Fatalf("creating fugaci provider failed")
+				log.G(ctx).Fatal(err)
 			}
-
-			podController, err := bootstrap.NewPodController(cmd.Context(), informerFactory, client, provider)
-
-			if err != nil {
-				log.Fatalf("Failed to initialize Pod controller: %v", err)
-				return
-			}
-
-			// Start the informers
-			ctx := cmd.Context()
-			informerFactory.Start(cmd.Context().Done())
-
-			// Wait for informers to sync
-			informerFactory.WaitForCacheSync(ctx.Done())
-
-			go podController.Run(ctx, 1)
-			select {
-			case <-podController.Ready():
-			case <-podController.Done():
-			}
-			if podController.Err() != nil {
-				log.Fatalf("Error running pod controller: %v", err)
-				return
-			}
-			log.Printf("Pod controller started succesfully")
-
-			var wg sync.WaitGroup
-			wg.Add(1)
-			go bootstrap.StartAPIDaemon(ctx, provider, &wg, 10250)
-
-			nodeutil.NewNode()
-			nodeController, err := bootstrap.NewNodeController(cmd.Context(), client, cfg)
-			err = nodeController.Run(ctx)
-			if err != nil {
-				log.Printf("Node controller finished with error %v", err)
-			} else {
-				log.Printf("Node controller finished gracefully")
-			}
-			wg.Wait()
 			return
 		},
 	}
+
+	flags := serveCommand.Flags()
+
+	klogFlags := flag.NewFlagSet("klog", flag.ContinueOnError)
+	klog.InitFlags(klogFlags)
+	klogFlags.VisitAll(func(f *flag.Flag) {
+		f.Name = "klog." + f.Name
+		flags.AddGoFlag(f)
+	})
 
 	return serveCommand
 }

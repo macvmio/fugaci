@@ -1,7 +1,6 @@
 package fugaci
 
 import (
-	"context"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -86,17 +85,12 @@ func (s *Node) OperatingSystem() string {
 	return runtime.GOOS
 }
 
-func (s *Node) Configure(ctx context.Context, node *corev1.Node) {
-	node.TypeMeta = metav1.TypeMeta{
-		Kind: "v1",
-	}
-	node.ObjectMeta.Name = s.name
-	node.Spec.Taints = []v1.Taint{{
+func (s *Node) Configure(node *corev1.Node) {
+	node.Spec.Taints = append(node.Spec.Taints, v1.Taint{
 		Key:    "fugaci.virtual-kubelet.io",
 		Value:  "true",
 		Effect: v1.TaintEffectNoSchedule,
-	},
-	}
+	})
 	node.Status.Capacity = s.capacity()
 	node.Status.Allocatable = s.capacity()
 	node.Status.Conditions = s.conditions()
@@ -107,7 +101,7 @@ func (s *Node) Configure(ctx context.Context, node *corev1.Node) {
 	node.ObjectMeta.Labels["kubernetes.io/os"] = s.OperatingSystem()
 }
 
-func NewNode(ctx context.Context, cfg Config) Node {
+func NewNode(cfg Config) Node {
 	return Node{
 		name: cfg.NodeName,
 	}
