@@ -2,18 +2,17 @@ package bootstrap
 
 import (
 	"context"
-	"github.com/pkg/errors"
 	"github.com/tomekjarosik/fugaci/pkg/fugaci"
 	"github.com/virtual-kubelet/virtual-kubelet/node"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apiextensions-apiserver/examples/client-go/pkg/client/clientset/versioned/scheme"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
 	"path"
 )
 
-func NewPodController(ctx context.Context, informerFactory informers.SharedInformerFactory, client *kubernetes.Clientset, cfg fugaci.Config) (*node.PodController, error) {
+func NewPodController(ctx context.Context, informerFactory informers.SharedInformerFactory, client *kubernetes.Clientset, provider *fugaci.Provider) (*node.PodController, error) {
 	// Create informers for Pods, ConfigMaps, Secrets, and Services
 	podInformer := informerFactory.Core().V1().Pods()
 	configMapInformer := informerFactory.Core().V1().ConfigMaps()
@@ -32,16 +31,11 @@ func NewPodController(ctx context.Context, informerFactory informers.SharedInfor
 	//eb.StartLogging(log.G(ctx).Infof)
 	//eb.StartRecordingToSink(&corev1client.EventSinkImpl{Interface: client.CoreV1().Events(c.KubeNamespace)})
 
-	provider, err := fugaci.NewProvider(cfg)
-	if err != nil {
-		return nil, errors.Wrap(err, "creating fugaci provider failed")
-	}
-
 	// Create the PodController
 	return node.NewPodController(node.PodControllerConfig{
 		PodClient:         client.CoreV1(),
 		PodInformer:       podInformer,
-		EventRecorder:     eb.NewRecorder(scheme.Scheme, corev1.EventSource{Component: path.Join(cfg.NodeName, "pod-controller")}),
+		EventRecorder:     eb.NewRecorder(scheme.Scheme, corev1.EventSource{Component: path.Join(provider.NodeName(), "pod-controller")}),
 		Provider:          provider,
 		ConfigMapInformer: configMapInformer,
 		SecretInformer:    secretInformer,

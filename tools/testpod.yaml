@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nano
+spec:
+  containers:
+    - image: macvm.store/base-runner:v1
+      imagePullPolicy: Always
+      command: [ "test123" ]
+      name: nanoserver
+  dnsPolicy: Default
+  restartPolicy: OnFailure
+  nodeSelector:
+    kubernetes.io/os: darwin
+  automountServiceAccountToken: false
+  tolerations:
+    - key: "fugaci.virtual-kubelet.io"
+      operator: "Equal"
+      value: "true"
+      effect: "NoSchedule"

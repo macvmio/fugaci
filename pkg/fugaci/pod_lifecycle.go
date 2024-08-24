@@ -50,6 +50,10 @@ func (s *Provider) prefixOnNodeMatch(assignedNode string) string {
 	return prefix
 }
 
+func (s *Provider) NodeName() string {
+	return s.cfg.NodeName
+}
+
 func (s *Provider) isPodAllowed(pod *v1.Pod) bool {
 	return pod.Spec.NodeName == s.cfg.NodeName
 }
@@ -132,9 +136,6 @@ func (s *Provider) DeletePod(ctx context.Context, pod *v1.Pod) error {
 
 // GetPodStatus returns a dummy Pod status
 func (s *Provider) GetPodStatus(ctx context.Context, namespace, name string) (*v1.PodStatus, error) {
-	if namespace != "jenkins" {
-		return nil, nil
-	}
 	log.Printf("[%s] GetPodStatus for %s/%s", s.cfg.NodeName, namespace, name)
 	pod, err := s.GetPod(ctx, namespace, name)
 	if err != nil || pod == nil {
@@ -147,9 +148,7 @@ func (s *Provider) GetPodStatus(ctx context.Context, namespace, name string) (*v
 	return &pod.Status, nil
 }
 
-// GetPods returns a list of dummy Pods to satisfy the provider interface
-func (s *Provider) GetPods(ctx context.Context) ([]*v1.Pod, error) {
-	log.Printf("Getting all Pods on node %s", s.cfg.NodeName)
-	// Return a list of pods or empty list
-	return []*v1.Pod{}, nil
-}
+// TODO:
+//func (s *Provider) NotifyPods(ctx context.Context, cb func(*v1.Pod)) {
+//	log.Printf("Notifying pods on node %s", s.nodeName)
+//}

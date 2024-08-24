@@ -64,7 +64,7 @@ func (s *Node) addresses() []v1.NodeAddress {
 	return []v1.NodeAddress{
 		{
 			Type:    v1.NodeInternalIP,
-			Address: "192.168.1.100",
+			Address: "192.168.1.99",
 		},
 		{
 			Type:    v1.NodeHostName,
@@ -81,11 +81,6 @@ func (s *Node) daemonEndpoints() v1.NodeDaemonEndpoints {
 		},
 	}
 }
-
-// TODO:
-//func (s *Provider) NotifyPods(ctx context.Context, cb func(*v1.Pod)) {
-//	log.Printf("Notifying pods on node %s", s.nodeName)
-//}
 
 func (s *Node) OperatingSystem() string {
 	return runtime.GOOS

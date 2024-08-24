@@ -6,8 +6,10 @@ import (
 	"github.com/tomekjarosik/fugaci/pkg/bootstrap"
 	"github.com/tomekjarosik/fugaci/pkg/fugaci"
 	"github.com/tomekjarosik/fugaci/pkg/k8s"
+	"github.com/virtual-kubelet/virtual-kubelet/node/nodeutil"
 	"k8s.io/client-go/informers"
 	"log"
+	"sync"
 	"time"
 )
 
@@ -33,7 +35,12 @@ func NewCmdServe() *cobra.Command {
 			// Create a shared informer factory with a default resync period
 			informerFactory := informers.NewSharedInformerFactory(client, 30*time.Second)
 
-			podController, err := bootstrap.NewPodController(cmd.Context(), informerFactory, client, cfg)
+			provider, err := fugaci.NewProvider(cfg)
+			if err != nil {
+				log.Fatalf("creating fugaci provider failed")
+			}
+
+			podController, err := bootstrap.NewPodController(cmd.Context(), informerFactory, client, provider)
 
 			if err != nil {
 				log.Fatalf("Failed to initialize Pod controller: %v", err)
@@ -48,17 +55,21 @@ func NewCmdServe() *cobra.Command {
 			informerFactory.WaitForCacheSync(ctx.Done())
 
 			go podController.Run(ctx, 1)
-
 			select {
 			case <-podController.Ready():
 			case <-podController.Done():
 			}
 			if podController.Err() != nil {
-				log.Fatalf("Error running pod controlle: %v", err)
+				log.Fatalf("Error running pod controller: %v", err)
 				return
 			}
 			log.Printf("Pod controller started succesfully")
 
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go bootstrap.StartAPIDaemon(ctx, provider, &wg, 10250)
+
+			nodeutil.NewNode()
 			nodeController, err := bootstrap.NewNodeController(cmd.Context(), client, cfg)
 			err = nodeController.Run(ctx)
 			if err != nil {
@@ -66,6 +77,7 @@ func NewCmdServe() *cobra.Command {
 			} else {
 				log.Printf("Node controller finished gracefully")
 			}
+			wg.Wait()
 			return
 		},
 	}
