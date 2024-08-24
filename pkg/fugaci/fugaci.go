@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"github.com/virtual-kubelet/node-cli/manager"
 	"github.com/virtual-kubelet/virtual-kubelet/errdefs"
 	"github.com/virtual-kubelet/virtual-kubelet/node/api"
@@ -18,6 +17,8 @@ import (
 	"log"
 	"time"
 )
+
+// TODO: Add magic to verify in compile time that FugaciProvider conforms to virtual-kubelet interface
 
 type FugaciProvider struct {
 	resourceManager    *manager.ResourceManager
@@ -52,12 +53,24 @@ func NewFugaciProvider(nodeName string) (*FugaciProvider, error) {
 	}, nil
 }
 
+func (s *FugaciProvider) prefixOnNodeMatch(assignedNode string) string {
+	var prefix = "[OTHER]"
+	if assignedNode == s.nodeName {
+		prefix = "[CURRENT]"
+	}
+	return prefix
+}
+
+func (s *FugaciProvider) isPodAllowed(pod *v1.Pod) bool {
+	return pod.Spec.NodeName == s.nodeName
+}
+
 // CreatePod simulates creating a macOS VM.
 func (s *FugaciProvider) CreatePod(ctx context.Context, pod *v1.Pod) error {
-	log.Printf("Creating VM for Pod %s/%s on nodeSelector %#v: #%v", pod.Namespace, pod.Name, pod.Spec.NodeSelector, pod.Spec.NodeName)
-	if pod.Namespace != "jenkins" {
-		return errors.New("only support jenkins pods")
+	if !s.isPodAllowed(pod) {
+		return nil
 	}
+	log.Printf("%s Creating VM for Pod %s/%s on nodeSelector %#v: #%v", s.prefixOnNodeMatch(pod.Spec.NodeName), pod.Namespace, pod.Name, pod.Spec.NodeSelector, pod.Spec.NodeName)
 
 	// Implement VM creation logic here (simulated by storing the pod in memory)
 
@@ -71,11 +84,6 @@ func (s *FugaciProvider) CreatePod(ctx context.Context, pod *v1.Pod) error {
 
 // GetPod returns a dummy Pod or looks it up in the in-memory store to satisfy the provider interface.
 func (s *FugaciProvider) GetPod(ctx context.Context, namespace, name string) (*v1.Pod, error) {
-
-	if namespace == "jenkins" {
-		log.Printf("[%s] GetPod %s/%s", s.nodeName, namespace, name)
-	}
-
 	// Look up the pod in the in-memory store
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -106,6 +114,9 @@ func (s *FugaciProvider) UpdatePod(ctx context.Context, pod *v1.Pod) error {
 
 // DeletePod simulates deleting a macOS VM.
 func (s *FugaciProvider) DeletePod(ctx context.Context, pod *v1.Pod) error {
+	if !s.isPodAllowed(pod) {
+		return nil
+	}
 	log.Printf("[%s] Deleting VM for Pod %s/%s", s.nodeName, pod.Namespace, pod.Name)
 
 	// Lock the mutex to ensure thread-safe access to the podStore
@@ -275,6 +286,12 @@ func (s *FugaciProvider) nodeDaemonEndpoints() v1.NodeDaemonEndpoints {
 
 // ConfigureNode enables the FugaciProvider to configure the node object
 func (s *FugaciProvider) ConfigureNode(ctx context.Context, node *v1.Node) {
+	node.Spec.Taints = []v1.Taint{{
+		Key:    "virtual-kubelet.io/provider=fugaci",
+		Value:  "true",
+		Effect: v1.TaintEffectNoSchedule,
+	},
+	}
 	node.Status.Capacity = s.capacity()
 	node.Status.Allocatable = s.capacity()
 	node.Status.Conditions = s.nodeConditions()

@@ -63,6 +63,7 @@ func main() {
 
 	provider.ConfigureNode(ctx, &pNode)
 
+	// TODO:
 	client, err := newClient("/Users/tomek/.kube/config")
 	if err != nil {
 		log.Fatalf("Failed to create client: %v", err)
