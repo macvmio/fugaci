@@ -17,6 +17,8 @@ import (
 	"net/http"
 )
 
+// See https://github.com/virtual-kubelet/azure-aci/blob/master/cmd/virtual-kubelet/main.go#L170
+
 func NewCmdServe() *cobra.Command {
 	viper.SetDefault("LogLevel", "info")
 	var serveCommand = &cobra.Command{

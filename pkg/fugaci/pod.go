@@ -3,6 +3,8 @@ package fugaci
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"github.com/creack/pty"
 	io_prometheus_client "github.com/prometheus/client_model/go"
 	"github.com/virtual-kubelet/node-cli/manager"
 	"github.com/virtual-kubelet/virtual-kubelet/errdefs"
@@ -14,6 +16,8 @@ import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"log"
+	"os"
+	"os/exec"
 	"sync"
 )
 
@@ -176,9 +180,61 @@ func (s *Provider) GetContainerLogs(ctx context.Context, namespace, podName, con
 	panic("implement me")
 }
 
+func handleResize(tty *os.File, resizeCh <-chan api.TermSize) {
+	for size := range resizeCh {
+		// Handle TTY resize here
+		pty.Setsize(tty, &pty.Winsize{Cols: size.Width, Rows: size.Height})
+	}
+}
+
 func (s *Provider) RunInContainer(ctx context.Context, namespace, podName, containerName string, cmd []string, attach api.AttachIO) error {
-	//TODO implement me
-	panic("implement me")
+	// Create the exec.CommandContext
+	// Set the Stdin, Stdout, Stderr from the AttachIO interface
+	execCmd := exec.CommandContext(ctx, cmd[0], cmd[1:]...)
+	// Set the Stdin, Stdout, Stderr from the AttachIO interface
+	execCmd.Stdin = attach.Stdin()
+	execCmd.Stdout = attach.Stdout()
+	execCmd.Stderr = attach.Stderr()
+	// If TTY is enabled, use a pty (pseudo-terminal)
+	if attach.TTY() {
+		// TTY handling can be more complex, requiring packages like github.com/kr/pty
+		// For simplicity, this is a placeholder; real TTY support would require more setup
+		// Example using pty (pseudo-terminal):
+		pty, tty, err := pty.Open()
+		if err != nil {
+			return fmt.Errorf("failed to open pty: %w", err)
+		}
+		defer pty.Close()
+		execCmd.Stdin = tty
+		execCmd.Stdout = tty
+		execCmd.Stderr = tty
+		go handleResize(tty, attach.Resize()) // Resize handler
+	}
+
+	// Use a WaitGroup to wait for the command to complete and handle streams closure
+	var wg sync.WaitGroup
+
+	// Close the output streams when done
+	if stdout := attach.Stdout(); stdout != nil {
+		defer stdout.Close()
+	}
+	if stderr := attach.Stderr(); stderr != nil {
+		defer stderr.Close()
+	}
+
+	// Run the command asynchronously
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := execCmd.Run(); err != nil {
+			fmt.Printf("failed to execute command in container: %v\n", err)
+		}
+	}()
+
+	// Wait for command execution to finish
+	wg.Wait()
+
+	return nil
 }
 
 func (s *Provider) AttachToContainer(ctx context.Context, namespace, podName, containerName string, attach api.AttachIO) error {
