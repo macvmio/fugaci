@@ -87,7 +87,7 @@ func (s *Node) OperatingSystem() string {
 
 func (s *Node) Configure(node *corev1.Node) {
 	node.Spec.Taints = append(node.Spec.Taints, v1.Taint{
-		Key:    "fugaci.virtual-kubelet.io",
+		Key:    "fugaci.jarosik.online",
 		Value:  "true",
 		Effect: v1.TaintEffectNoSchedule,
 	})
