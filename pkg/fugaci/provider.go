@@ -48,7 +48,7 @@ func (n noOpPuller) Pull(ctx context.Context, image string, pullPolicy v1.PullPo
 func NewProvider(cfg Config) (*LoggingProvider, error) {
 	return NewLoggingProvider(&Provider{
 		puller: &noOpPuller{},
-		virt:   curie.NewVirtualization("/usr/local/bin/fakecurie"),
+		virt:   curie.NewVirtualization(cfg.CurieBinaryPath),
 		cfg:    cfg,
 		vms:    [2]*VM{},
 	}), nil
