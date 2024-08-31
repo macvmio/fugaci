@@ -97,7 +97,7 @@ func (s *Virtualization) Destroy(ctx context.Context, containerID string) error 
 func (s *Virtualization) Inspect(ctx context.Context, containerID string) (*InspectResponse, error) {
 	// Execute the "inspect" command and capture its output.
 	var stdout bytes.Buffer
-	cmd := exec.CommandContext(ctx, s.curieBinaryPath, "inspect", containerID)
+	cmd := exec.CommandContext(ctx, s.curieBinaryPath, "inspect", containerID, "--format", "json")
 	cmd.Stdout = &stdout // Capture standard output
 	cmd.Stderr = &stdout // Optionally, capture standard error as well for detailed error messages
 
