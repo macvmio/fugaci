@@ -82,9 +82,11 @@ func (s *Provider) findVM(pod *v1.Pod) (*VM, error) {
 		if s.vms[i] == nil {
 			continue
 		}
-		return s.vms[i], nil
+		if s.vms[i].pod.UID == pod.UID {
+			return s.vms[i], nil
+		}
 	}
-	return nil, errors.New("run out of slots to allocate VM")
+	return nil, errors.New("not found")
 }
 
 func (s *Provider) deallocateVM(vm *VM) error {
