@@ -209,6 +209,37 @@ func TestVM_Run_Successful(t *testing.T) {
 	assert.NotEmpty(t, status.State.Terminated.FinishedAt)
 }
 
+func TestVM_Run_Successful_mustBeReadyWithIPAddress(t *testing.T) {
+	vm, cleanup := setupTestVM(t, `#!/bin/bash
+	if [[ "$1" == "create" ]]; then
+		echo "containerid-456"
+		exit 0
+	fi
+	if [[ "$1" == "start" ]]; then
+		
+		sleep 1
+	fi
+	if [[ "$1" == "inspect" ]]; then
+		echo '{"arp":[{"IP":"192.168.1.10"}]}'
+	fi
+	exit 0
+`)
+	defer cleanup()
+
+	go vm.Run()
+
+	<-vm.LifetimeContext().Done()
+
+	status := vm.Status()
+	require.NotNil(t, status.State.Terminated)
+	assert.Equal(t, "containerid-456", status.ContainerID)
+	assert.Equal(t, int32(0), status.State.Terminated.ExitCode)
+	assert.Equal(t, "exit status 0", status.State.Terminated.Message)
+	assert.Equal(t, "exited successfully", status.State.Terminated.Reason)
+	assert.NotEmpty(t, status.State.Terminated.StartedAt)
+	assert.NotEmpty(t, status.State.Terminated.FinishedAt)
+}
+
 func TestVM_Run_ProcessIsHanging(t *testing.T) {
 	vm, cleanup := setupTestVM(t, `#!/bin/bash
 	if [[ "$1" == "create" ]]; then

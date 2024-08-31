@@ -1,11 +1,14 @@
 package curie
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	v1 "k8s.io/api/core/v1"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"strings"
@@ -22,7 +25,9 @@ func NewVirtualization(curieBinaryPath string) *Virtualization {
 	}
 }
 
-func (s *Virtualization) Create(ctx context.Context, pod *v1.Pod, containerIndex int) (containerID string, err error) {
+var ErrNotExists = errors.New("not exists")
+
+func (s *Virtualization) Create(ctx context.Context, pod v1.Pod, containerIndex int) (containerID string, err error) {
 	containerSpec := pod.Spec.Containers[containerIndex]
 	name := pod.Namespace + "-" + pod.Name + "-" + containerSpec.Name
 	if len(containerSpec.Name) == 0 {
@@ -86,4 +91,54 @@ func (s *Virtualization) Remove(ctx context.Context, containerID string) error {
 	err := exec.CommandContext(ctx, s.curieBinaryPath, "rm", containerID).Run()
 	log.Printf("removed container '%v': err=%v", containerID, err)
 	return err
+}
+
+// Inspect runs the inspect command on the specified container and returns the inspection result.
+func (s *Virtualization) Inspect(ctx context.Context, containerID string) (*InspectResponse, error) {
+	// Execute the "inspect" command and capture its output.
+	var stdout bytes.Buffer
+	cmd := exec.CommandContext(ctx, s.curieBinaryPath, "inspect", containerID)
+	cmd.Stdout = &stdout // Capture standard output
+	cmd.Stderr = &stdout // Optionally, capture standard error as well for detailed error messages
+
+	if err := cmd.Run(); err != nil {
+		// Return more information by including the output of the command (if any) in the error message.
+		if strings.Contains(stdout.String(), "Cannot find the container") {
+			return nil, ErrNotExists
+		}
+		return nil, fmt.Errorf("failed to execute inspect command: %v, output: %s", err, stdout.String())
+	}
+
+	// Parse JSON output into InspectResponse struct.
+	var response InspectResponse
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		// If parsing fails, return an appropriate error.
+		return nil, fmt.Errorf("failed to parse inspect output: %v", err)
+	}
+
+	return &response, nil
+}
+
+// IP Returns valid IP address or error
+func (s *Virtualization) IP(ctx context.Context, containerID string) (net.IP, error) {
+	r, err := s.Inspect(ctx, containerID)
+	if err != nil {
+		return nil, err
+	}
+	if len(r.Arp) == 0 {
+		return nil, errors.New("no arp found")
+	}
+	ip := net.ParseIP(r.Arp[0].IP)
+	if ip == nil {
+		return nil, fmt.Errorf("invalid ip address: %v", ip)
+	}
+	return ip, nil
+}
+
+func (s *Virtualization) Exists(ctx context.Context, containerID string) (bool, error) {
+	_, err := s.Inspect(ctx, containerID)
+	if errors.Is(err, ErrNotExists) {
+		return false, nil
+	}
+	return err == nil, err
 }

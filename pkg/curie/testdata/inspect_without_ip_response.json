@@ -1,0 +1,49 @@
+{
+  "info" : {
+    "config" : {
+      "cpuCount" : 6,
+      "memorySize" : {
+        "bytes" : 4294967296
+      },
+      "network" : {
+        "devices" : [
+          {
+            "mode" : "NAT",
+            "macAddress" : "synthesized"
+          }
+        ]
+      },
+      "display" : {
+        "height" : 1080,
+        "width" : 1920,
+        "pixelsPerInch" : 144
+      },
+      "sharedDirectory" : {
+        "directories" : [
+
+        ]
+      },
+      "shutdown" : {
+        "behaviour" : {
+          "stop" : {
+
+          }
+        }
+      }
+    },
+    "metadata" : {
+      "network" : {
+        "devices" : {
+          "0" : {
+            "MACAddress" : "3e:0e:77:6a:d8:ac"
+          }
+        }
+      },
+      "id" : "5db367f3e74e",
+      "createdAt" : "2024-08-08T21:58:36Z"
+    }
+  },
+  "arp" : [
+
+  ]
+}

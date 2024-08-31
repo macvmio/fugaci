@@ -7,9 +7,11 @@ import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"sync"
+	"time"
 )
 
 type Puller interface {
@@ -17,10 +19,12 @@ type Puller interface {
 }
 
 type Virtualization interface {
-	Create(ctx context.Context, pod *v1.Pod, containerIndex int) (containerID string, err error)
+	Create(ctx context.Context, pod v1.Pod, containerIndex int) (containerID string, err error)
 	Start(ctx context.Context, containerID string) (runCommand *exec.Cmd, err error)
 	Stop(ctx context.Context, containerRunCmd *exec.Cmd) error
 	Remove(ctx context.Context, containerID string) error
+	IP(ctx context.Context, containerID string) (net.IP, error)
+	Exists(ctx context.Context, containerID string) (bool, error)
 }
 
 type VM struct {
@@ -80,6 +84,12 @@ func (s *VM) updateStatus(f func(s *v1.ContainerStatus)) {
 	f(&s.pod.Status.ContainerStatuses[s.containerIndex])
 }
 
+func (s *VM) updatePodIP(ip net.IP) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pod.Status.PodIP = ip.String()
+}
+
 func (s *VM) containerSpec() v1.Container {
 	return s.pod.Spec.Containers[s.containerIndex]
 }
@@ -113,7 +123,6 @@ func (s *VM) Run() {
 	}
 	s.updateStatus(func(st *v1.ContainerStatus) {
 		st.ContainerID = containerID
-		st.Ready = true
 	})
 	s.updateState(v1.ContainerState{Waiting: &v1.ContainerStateWaiting{Reason: "Created"}})
 
@@ -127,6 +136,7 @@ func (s *VM) Run() {
 	startedAt := metav1.Now()
 	s.updateState(v1.ContainerState{Running: &v1.ContainerStateRunning{StartedAt: startedAt}})
 	log.Printf("started container '%v': %v", containerID, runCmd)
+	go s.observeIP(s.lifetimeCtx, containerID)
 	err = runCmd.Wait()
 	s.updateStatus(func(st *v1.ContainerStatus) {
 		st.Ready = false
@@ -180,6 +190,29 @@ func (s *VM) Cleanup() error {
 	log.Printf("waiting for lifetimeCtx...\n")
 	<-s.lifetimeCtx.Done()
 	return s.virt.Remove(context.Background(), s.Status().ContainerID)
+}
+
+func (s *VM) observeIP(ctx context.Context, containerID string) {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			// Exit if the context is canceled or the deadline is exceeded
+			return
+		case <-ticker.C:
+			// Run the IP check synchronously within the select block
+			ip, err := s.virt.IP(ctx, containerID)
+			if err != nil {
+				continue
+			}
+			s.updatePodIP(ip)
+			s.updateStatus(func(st *v1.ContainerStatus) {
+				st.Ready = true
+			})
+		}
+	}
 }
 
 func (s *VM) Matches(namespace, name string) bool {
