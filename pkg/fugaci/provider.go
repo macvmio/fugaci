@@ -41,7 +41,7 @@ type Provider struct {
 type noOpPuller struct {
 }
 
-func (n noOpPuller) Pull(ctx context.Context, image string) error {
+func (n noOpPuller) Pull(ctx context.Context, image string, pullPolicy v1.PullPolicy) error {
 	return nil
 }
 

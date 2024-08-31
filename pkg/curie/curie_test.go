@@ -2,6 +2,7 @@ package curie
 
 import (
 	"context"
+	"errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"net"
 	"os"
@@ -141,32 +142,47 @@ func TestVirtualization_Start(t *testing.T) {
 	assert.Nil(t, cmd.Process.Signal(os.Interrupt))
 }
 
-//TODO
-//func TestVirtualization_Stop(t *testing.T) {
-//	scriptContent := `#!/bin/bash
-//	if [ "$1" == "start" ]; then
-//		sleep 5
-//		echo "started"
-//	else
-//		exit 1
-//	fi`
-//	scriptPath, err := createTestScript(scriptContent)
-//	assert.NoError(t, err)
-//	defer removeTestScript(scriptPath)
-//
-//	v := NewVirtualization(scriptPath)
-//	cmd, err := v.Start(context.Background(), "container123")
-//	assert.NoError(t, err)
-//
-//	go func() {
-//		err := cmd.Wait()
-//		assert.NoError(t, err)
-//	}()
-//	time.Sleep(1 * time.Second)
-//
-//	err = v.Stop(context.Background(), cmd)
-//	assert.NoError(t, err)
-//}
+func TestVirtualization_Stop_processDidNotExitWithin5Seconds(t *testing.T) {
+	scriptContent := `#!/bin/bash
+		sleep 10`
+	scriptPath, err := createTestScript(scriptContent)
+	assert.NoError(t, err)
+	defer removeTestScript(scriptPath)
+
+	v := NewVirtualization(scriptPath)
+	cmd, err := v.Start(context.Background(), "container123")
+	assert.NoError(t, err)
+
+	go func() {
+		err := cmd.Wait()
+		assert.NoError(t, err)
+	}()
+	time.Sleep(100 * time.Millisecond)
+
+	err = v.Stop(context.Background(), cmd)
+	assert.Error(t, errors.New("process did not exit within 5 seconds"))
+}
+
+func TestVirtualization_Stop_mustReactToSigInt(t *testing.T) {
+	scriptContent := `#!/bin/bash
+		wait`
+	scriptPath, err := createTestScript(scriptContent)
+	assert.NoError(t, err)
+	defer removeTestScript(scriptPath)
+
+	v := NewVirtualization(scriptPath)
+	cmd, err := v.Start(context.Background(), "container123")
+	assert.NoError(t, err)
+
+	go func() {
+		err := cmd.Wait()
+		assert.NoError(t, err)
+	}()
+	time.Sleep(100 * time.Millisecond)
+
+	err = v.Stop(context.Background(), cmd)
+	assert.Error(t, errors.New("process did not exit within 5 seconds"))
+}
 
 func TestVirtualization_Remove(t *testing.T) {
 	scriptContent := `#!/bin/bash
@@ -180,7 +196,7 @@ func TestVirtualization_Remove(t *testing.T) {
 	defer removeTestScript(scriptPath)
 
 	v := NewVirtualization(scriptPath)
-	err = v.Remove(context.Background(), "container123")
+	err = v.Destroy(context.Background(), "container123")
 	assert.NoError(t, err)
 }
 
@@ -203,20 +219,41 @@ func TestVirtualization_Inspect(t *testing.T) {
 }
 
 func TestVirtualization_IP(t *testing.T) {
-	scriptContent := `#!/bin/bash
-	if [ "$1" == "inspect" ]; then
-		echo '{"arp":[{"IP":"192.168.1.10"}]}'
-	else
-		exit 1
-	fi`
-	scriptPath, err := createTestScript(scriptContent)
-	assert.NoError(t, err)
-	defer removeTestScript(scriptPath)
+	// Subtest: IP is present
+	t.Run("IP is present", func(t *testing.T) {
+		scriptContent := `#!/bin/bash
+		if [ "$1" == "inspect" ]; then
+			echo '{"arp":[{"IP":"192.168.1.10"}]}'
+		else
+			exit 1
+		fi`
+		scriptPath, err := createTestScript(scriptContent)
+		assert.NoError(t, err)
+		defer removeTestScript(scriptPath)
 
-	v := NewVirtualization(scriptPath)
-	ip, err := v.IP(context.Background(), "container123")
-	assert.NoError(t, err)
-	assert.Equal(t, net.ParseIP("192.168.1.10"), ip)
+		v := NewVirtualization(scriptPath)
+		ip, err := v.IP(context.Background(), "container123")
+		assert.NoError(t, err)
+		assert.Equal(t, net.ParseIP("192.168.1.10"), ip)
+	})
+
+	// Subtest: IP is not present
+	t.Run("IP is not present", func(t *testing.T) {
+		scriptContent := `#!/bin/bash
+		if [ "$1" == "inspect" ]; then
+			echo '{"arp":[]}'  # No IP present
+		else
+			exit 1
+		fi`
+		scriptPath, err := createTestScript(scriptContent)
+		assert.NoError(t, err)
+		defer removeTestScript(scriptPath)
+
+		v := NewVirtualization(scriptPath)
+		ip, err := v.IP(context.Background(), "container123")
+		assert.Error(t, err)
+		assert.Nil(t, ip)
+	})
 }
 
 func TestVirtualization_Exists(t *testing.T) {

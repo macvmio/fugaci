@@ -15,16 +15,24 @@ import (
 )
 
 type Puller interface {
-	Pull(ctx context.Context, image string) error
+	Pull(ctx context.Context, image string, policy v1.PullPolicy) error
 }
 
-type Virtualization interface {
+type VirtualizationLifecycle interface {
 	Create(ctx context.Context, pod v1.Pod, containerIndex int) (containerID string, err error)
 	Start(ctx context.Context, containerID string) (runCommand *exec.Cmd, err error)
 	Stop(ctx context.Context, containerRunCmd *exec.Cmd) error
-	Remove(ctx context.Context, containerID string) error
+	Destroy(ctx context.Context, containerID string) error
+}
+
+type VirtualizationStatus interface {
 	IP(ctx context.Context, containerID string) (net.IP, error)
 	Exists(ctx context.Context, containerID string) (bool, error)
+}
+
+type Virtualization interface {
+	VirtualizationLifecycle
+	VirtualizationStatus
 }
 
 type VM struct {
@@ -95,22 +103,20 @@ func (s *VM) containerSpec() v1.Container {
 }
 
 func (s *VM) Run() {
-	if s.containerSpec().ImagePullPolicy != v1.PullNever {
-		s.updateState(v1.ContainerState{Waiting: &v1.ContainerStateWaiting{Reason: "Pulling"}})
-		err := s.puller.Pull(s.lifetimeCtx, s.containerSpec().Image)
-		if err != nil {
-			s.updateState(v1.ContainerState{Terminated: &v1.ContainerStateTerminated{
-				Reason:  "unable to pull image",
-				Message: err.Error()},
-			})
-			s.cancelFunc(fmt.Errorf("failed to pull image: %v", err))
-			return
-		}
-		log.Printf("pulled image: %v", s.containerSpec().Image)
-		s.updateState(v1.ContainerState{Waiting: &v1.ContainerStateWaiting{Reason: "Pulled"}})
+	s.updateState(v1.ContainerState{Waiting: &v1.ContainerStateWaiting{Reason: "Pulling"}})
+	err := s.puller.Pull(s.lifetimeCtx, s.containerSpec().Image, s.containerSpec().ImagePullPolicy)
+	if err != nil {
+		s.updateState(v1.ContainerState{Terminated: &v1.ContainerStateTerminated{
+			Reason:  "unable to pull image",
+			Message: err.Error()},
+		})
+		s.cancelFunc(fmt.Errorf("failed to pull image: %v", err))
+		return
 	}
+	log.Printf("pulled image: %v", s.containerSpec().Image)
+	s.updateState(v1.ContainerState{Waiting: &v1.ContainerStateWaiting{Reason: "Pulled"}})
 
-	containerID, err := s.virt.Create(s.lifetimeCtx, s.pod, 0)
+	containerID, err := s.virt.Create(s.lifetimeCtx, *s.pod, 0)
 	if err != nil {
 		s.updateState(v1.ContainerState{Terminated: &v1.ContainerStateTerminated{
 			ExitCode: 1,
@@ -129,6 +135,16 @@ func (s *VM) Run() {
 	log.Printf("created container from image '%v': %v", s.containerSpec().Image, containerID)
 	runCmd, err := s.virt.Start(s.lifetimeCtx, containerID)
 	if err != nil {
+		err2 := s.virt.Destroy(s.lifetimeCtx, containerID)
+		if err2 != nil {
+			log.Printf("failed to destroy container: %v", err2)
+		}
+		s.updateState(v1.ContainerState{Terminated: &v1.ContainerStateTerminated{
+			ExitCode:   1,
+			Reason:     "unable to start process",
+			Message:    fmt.Sprintf("failed to start container '%v' with: %v", containerID, err),
+			FinishedAt: metav1.Now(),
+		}})
 		s.cancelFunc(fmt.Errorf("failed to start container: %v", err))
 		return
 	}
@@ -153,8 +169,8 @@ func (s *VM) Run() {
 		return
 	}
 
-	log.Printf("container '%v' exited: %v", containerID, runCmd)
-	err = s.virt.Remove(context.Background(), containerID)
+	log.Printf("container '%v' finished successfully: %v", containerID, runCmd)
+	err = s.virt.Destroy(context.Background(), containerID)
 	if err != nil {
 		s.cancelFunc(fmt.Errorf("failed to remove container: %v", err))
 		return
@@ -189,7 +205,7 @@ func (s *VM) Cleanup() error {
 	}
 	log.Printf("waiting for lifetimeCtx...\n")
 	<-s.lifetimeCtx.Done()
-	return s.virt.Remove(context.Background(), s.Status().ContainerID)
+	return s.virt.Destroy(context.Background(), s.Status().ContainerID)
 }
 
 func (s *VM) observeIP(ctx context.Context, containerID string) {

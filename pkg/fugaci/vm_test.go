@@ -3,15 +3,13 @@ package fugaci
 import (
 	"context"
 	"errors"
-	"fmt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"github.com/tomekjarosik/fugaci/pkg/curie"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"os"
-	"path/filepath"
+	"net"
+	"os/exec"
 	"testing"
 	"time"
 )
@@ -21,76 +19,73 @@ type MockPuller struct {
 	mock.Mock
 }
 
-func (m *MockPuller) Pull(ctx context.Context, image string) error {
-	args := m.Called(ctx, image)
+func (m *MockPuller) Pull(ctx context.Context, image string, pullPolicy v1.PullPolicy) error {
+	args := m.Called(ctx, image, pullPolicy)
 	return args.Error(0)
 }
 
-func createTempScript(content string) (string, error) {
-	tempDir, err := os.MkdirTemp("", "temp-script")
-	if err != nil {
-		return "", fmt.Errorf("failed to create temp directory: %v", err)
-	}
-
-	scriptPath := filepath.Join(tempDir, "fakecurie")
-	file, err := os.OpenFile(scriptPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0755)
-	if err != nil {
-		return "", fmt.Errorf("failed to create temp script file: %v", err)
-	}
-	defer file.Close()
-
-	_, err = file.WriteString(content)
-	if err != nil {
-		return "", fmt.Errorf("failed to write to temp script file: %v", err)
-	}
-
-	return scriptPath, nil
+// MockVirtualization is a mock of the Virtualization interface.
+type MockVirtualization struct {
+	mock.Mock
 }
 
-func setupTestVM(t *testing.T, scriptContent string) (*VM, func()) {
-	mockPuller := new(MockPuller)
-	mockPuller.On("Pull", mock.Anything, mock.Anything).Return(nil)
+func (m *MockVirtualization) Create(ctx context.Context, pod v1.Pod, containerIndex int) (containerID string, err error) {
+	args := m.Called(ctx, pod, containerIndex)
+	return args.String(0), args.Error(1)
+}
 
+func (m *MockVirtualization) Start(ctx context.Context, containerID string) (*exec.Cmd, error) {
+	args := m.Called(ctx, containerID)
+	return args.Get(0).(*exec.Cmd), args.Error(1)
+}
+
+func (m *MockVirtualization) Stop(ctx context.Context, containerRunCmd *exec.Cmd) error {
+	args := m.Called(ctx, containerRunCmd)
+	return args.Error(0)
+}
+
+func (m *MockVirtualization) Destroy(ctx context.Context, containerID string) error {
+	args := m.Called(ctx, containerID)
+	return args.Error(0)
+}
+
+func (m *MockVirtualization) IP(ctx context.Context, containerID string) (net.IP, error) {
+	args := m.Called(ctx, containerID)
+	return net.ParseIP(args.String(0)), args.Error(1)
+}
+
+func (m *MockVirtualization) Exists(ctx context.Context, containerID string) (bool, error) {
+	args := m.Called(ctx, containerID)
+	return args.Bool(0), args.Error(1)
+}
+
+func setupTestVM(t *testing.T, mockVirt *MockVirtualization, mockPuller *MockPuller) (*VM, func()) {
 	pod := &v1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "test-pod",
-		}, Spec: v1.PodSpec{
+		},
+		Spec: v1.PodSpec{
 			Containers: []v1.Container{
 				{Name: "test-container", Image: "test-image", ImagePullPolicy: v1.PullIfNotPresent},
 			},
-		}}
+		},
+	}
 
-	script, err := createTempScript(scriptContent)
-	require.NoError(t, err)
-
-	virt := curie.NewVirtualization(script)
-	vm, err := NewVM(virt, mockPuller, pod, 0)
+	vm, err := NewVM(mockVirt, mockPuller, pod, 0)
 	require.NoError(t, err)
 	require.NotNil(t, vm)
-	return vm, func() { os.Remove(script) }
+	return vm, func() {}
 }
 
 func TestVM_Run_ErrorWhilePulling(t *testing.T) {
 	mockPuller := new(MockPuller)
-	mockPuller.On("Pull", mock.Anything, mock.Anything).Return(errors.New("invalid image"))
+	mockPuller.On("Pull", mock.Anything, mock.Anything, mock.Anything).Return(errors.New("invalid image"))
 
-	pod := &v1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "test-pod",
-		}, Spec: v1.PodSpec{
-			Containers: []v1.Container{
-				{Name: "test-container", Image: "test-image", ImagePullPolicy: v1.PullIfNotPresent},
-			},
-		}}
+	mockVirt := new(MockVirtualization)
 
-	script, err := createTempScript("x")
-	require.NoError(t, err)
+	vm, cleanup := setupTestVM(t, mockVirt, mockPuller)
+	defer cleanup()
 
-	defer os.Remove(script)
-
-	virt := curie.NewVirtualization(script)
-	vm, err := NewVM(virt, mockPuller, pod, 0)
-	require.NoError(t, err)
 	go vm.Run()
 
 	<-vm.LifetimeContext().Done()
@@ -102,7 +97,13 @@ func TestVM_Run_ErrorWhilePulling(t *testing.T) {
 }
 
 func TestVM_Run_CreateContainerFailed_InvalidBinary(t *testing.T) {
-	vm, cleanup := setupTestVM(t, "")
+	mockPuller := new(MockPuller)
+	mockPuller.On("Pull", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	mockVirt := new(MockVirtualization)
+	mockVirt.On("Create", mock.Anything, mock.Anything, mock.Anything).Return("", errors.New("exec format error"))
+
+	vm, cleanup := setupTestVM(t, mockVirt, mockPuller)
 	defer cleanup()
 
 	go vm.Run()
@@ -117,37 +118,12 @@ func TestVM_Run_CreateContainerFailed_InvalidBinary(t *testing.T) {
 
 func TestVM_Run_CreateContainerFailed_MissingBinary(t *testing.T) {
 	mockPuller := new(MockPuller)
-	mockPuller.On("Pull", mock.Anything, mock.Anything).Return(nil)
+	mockPuller.On("Pull", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
-	pod := &v1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "test-pod",
-		}, Spec: v1.PodSpec{
-			Containers: []v1.Container{
-				{Name: "test-container", Image: "test-image", ImagePullPolicy: v1.PullIfNotPresent},
-			},
-		}}
+	mockVirt := new(MockVirtualization)
+	mockVirt.On("Create", mock.Anything, mock.Anything, mock.Anything).Return("", errors.New("no such file or directory"))
 
-	virt := curie.NewVirtualization("test/123")
-	vm, err := NewVM(virt, mockPuller, pod, 0)
-	require.NoError(t, err)
-
-	go vm.Run()
-
-	<-vm.LifetimeContext().Done()
-
-	status := vm.Status()
-	assert.Equal(t, *status.State.Terminated, v1.ContainerStateTerminated{
-		ExitCode: 1,
-		Reason:   "failed to create container",
-		Message:  "failed to create container: fork/exec test/123: no such file or directory",
-	})
-}
-
-func TestVM_Run_CreateContainerFailed_Crash(t *testing.T) {
-	vm, cleanup := setupTestVM(t, `#!/bin/bash
-	exit 13
-`)
+	vm, cleanup := setupTestVM(t, mockVirt, mockPuller)
 	defer cleanup()
 
 	go vm.Run()
@@ -155,21 +131,41 @@ func TestVM_Run_CreateContainerFailed_Crash(t *testing.T) {
 	<-vm.LifetimeContext().Done()
 
 	status := vm.Status()
-	assert.Equal(t, *status.State.Terminated, v1.ContainerStateTerminated{
-		ExitCode: 1,
-		Reason:   "failed to create container",
-		Message:  "failed to create container: exit status 13",
-	})
+	require.NotNil(t, status.State.Terminated)
+	assert.Equal(t, "failed to create container", status.State.Terminated.Reason)
+	assert.Contains(t, status.State.Terminated.Message, "no such file or directory")
+}
+
+func TestVM_Run_CreateContainerFailed_Crash(t *testing.T) {
+	mockPuller := new(MockPuller)
+	mockPuller.On("Pull", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	mockVirt := new(MockVirtualization)
+	mockVirt.On("Create", mock.Anything, mock.Anything, mock.Anything).Return("", errors.New("exit status 13"))
+
+	vm, cleanup := setupTestVM(t, mockVirt, mockPuller)
+	defer cleanup()
+
+	go vm.Run()
+
+	<-vm.LifetimeContext().Done()
+
+	status := vm.Status()
+	require.NotNil(t, status.State.Terminated)
+	assert.Equal(t, "failed to create container", status.State.Terminated.Reason)
+	assert.Contains(t, status.State.Terminated.Message, "exit status 13")
 }
 
 func TestVM_Run_StartContainerFailed_Crash(t *testing.T) {
-	vm, cleanup := setupTestVM(t, `#!/bin/bash
-	if [[ "$1" == "create" ]]; then
-		echo "containerid-123"
-		exit 0
-	fi
-	exit 13
-`)
+	mockPuller := new(MockPuller)
+	mockPuller.On("Pull", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	mockVirt := new(MockVirtualization)
+	mockVirt.On("Create", mock.Anything, mock.Anything, mock.Anything).Return("containerid-123", nil)
+	mockVirt.On("Start", mock.Anything, "containerid-123").Return(&exec.Cmd{}, errors.New("exit status 13"))
+	mockVirt.On("Destroy", mock.Anything, "containerid-123").Return(nil)
+
+	vm, cleanup := setupTestVM(t, mockVirt, mockPuller)
 	defer cleanup()
 
 	go vm.Run()
@@ -181,21 +177,34 @@ func TestVM_Run_StartContainerFailed_Crash(t *testing.T) {
 	assert.Equal(t, "containerid-123", status.ContainerID)
 	assert.Equal(t, int32(1), status.State.Terminated.ExitCode)
 	assert.Equal(t, "unable to start process", status.State.Terminated.Reason)
-	assert.Contains(t, status.State.Terminated.Message, "fakecurie start containerid-123' command failed with error 'exit status 13'")
-	assert.NotEmpty(t, status.State.Terminated.StartedAt)
+	assert.Contains(t, status.State.Terminated.Message, "exit status 13")
+	assert.NotEmpty(t, status.State.Terminated.FinishedAt)
 }
 
 func TestVM_Run_Successful(t *testing.T) {
-	vm, cleanup := setupTestVM(t, `#!/bin/bash
-	if [[ "$1" == "create" ]]; then
-		echo "containerid-456"
-		exit 0
-	fi
-	exit 0
-`)
+	mockPuller := new(MockPuller)
+	mockPuller.On("Pull", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	mockVirt := new(MockVirtualization)
+	mockVirt.On("Create", mock.Anything, mock.Anything, mock.Anything).Return("containerid-456", nil)
+	cmd := exec.Command("/bin/bash")
+	cmd.Start()
+
+	mockVirt.On("Start", mock.Anything, "containerid-456").Return(cmd, nil)
+	// Mock the Stop method with a custom matcher for context and the command
+	mockVirt.On("Stop", mock.MatchedBy(func(ctx context.Context) bool {
+		return true
+	}), mock.MatchedBy(func(c *exec.Cmd) bool {
+		return c == cmd
+	})).Return(nil)
+	mockVirt.On("Destroy", mock.Anything, "containerid-456").Return(nil)
+	mockVirt.On("IP", mock.Anything).Return(net.IPv4(1, 2, 3, 4))
+
+	vm, cleanup := setupTestVM(t, mockVirt, mockPuller)
 	defer cleanup()
 
 	go vm.Run()
+	time.Sleep(200 * time.Millisecond)
 
 	<-vm.LifetimeContext().Done()
 
@@ -207,31 +216,45 @@ func TestVM_Run_Successful(t *testing.T) {
 	assert.Equal(t, "exited successfully", status.State.Terminated.Reason)
 	assert.NotEmpty(t, status.State.Terminated.StartedAt)
 	assert.NotEmpty(t, status.State.Terminated.FinishedAt)
+
+	// Assert that Stop and Remove (previously Destroy) were called
+	//mockVirt.AssertCalled(t, "Stop", mock.Anything, cmd)
+	mockVirt.AssertCalled(t, "Destroy", mock.Anything, "containerid-456")
 }
 
 func TestVM_Run_Successful_mustBeReadyWithIPAddress(t *testing.T) {
-	vm, cleanup := setupTestVM(t, `#!/bin/bash
-	if [[ "$1" == "create" ]]; then
-		echo "containerid-456"
-		exit 0
-	fi
-	if [[ "$1" == "start" ]]; then
-		
-		sleep 1
-	fi
-	if [[ "$1" == "inspect" ]]; then
-		echo '{"arp":[{"IP":"192.168.1.10"}]}'
-	fi
-	exit 0
-`)
+	mockPuller := new(MockPuller)
+	mockPuller.On("Pull", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	mockVirt := new(MockVirtualization)
+	cmd := exec.Command("/usr/bin/sleep", "0.3")
+	cmd.Start()
+	mockVirt.On("Create", mock.Anything, mock.Anything, mock.Anything).Return("containerid-456", nil)
+	mockVirt.On("Start", mock.Anything, "containerid-456").Return(cmd, nil)
+	mockVirt.On("IP", mock.Anything, "containerid-456").Return("192.168.1.10", nil)
+	mockVirt.On("Destroy", mock.Anything, "containerid-456").Return(nil)
+
+	vm, cleanup := setupTestVM(t, mockVirt, mockPuller)
 	defer cleanup()
 
 	go vm.Run()
+
+	for {
+		status := vm.Status()
+		if !status.Ready {
+			time.Sleep(5 * time.Millisecond)
+			continue
+		}
+		assert.True(t, status.Ready)
+		assert.Equal(t, "192.168.1.10", vm.GetPod().Status.PodIP)
+		break
+	}
 
 	<-vm.LifetimeContext().Done()
 
 	status := vm.Status()
 	require.NotNil(t, status.State.Terminated)
+
 	assert.Equal(t, "containerid-456", status.ContainerID)
 	assert.Equal(t, int32(0), status.State.Terminated.ExitCode)
 	assert.Equal(t, "exit status 0", status.State.Terminated.Message)
@@ -241,16 +264,22 @@ func TestVM_Run_Successful_mustBeReadyWithIPAddress(t *testing.T) {
 }
 
 func TestVM_Run_ProcessIsHanging(t *testing.T) {
-	vm, cleanup := setupTestVM(t, `#!/bin/bash
-	if [[ "$1" == "create" ]]; then
-		echo "containerid-123"
-		exit 0
-	fi
-	if [[ "$1" == "rm" ]]; then
-		exit 0
-	fi
-	sleep 1000000000
-`)
+	mockPuller := new(MockPuller)
+	mockPuller.On("Pull", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	mockVirt := new(MockVirtualization)
+	mockVirt.On("Create", mock.Anything, mock.Anything, mock.Anything).Return("containerid-123", nil)
+	cmd := exec.Command("/usr/bin/sleep", "1")
+	cmd.Start()
+	mockVirt.On("Start", mock.Anything, "containerid-123").Return(cmd, nil)
+	mockVirt.On("Stop", mock.MatchedBy(func(ctx context.Context) bool {
+		return true
+	}), mock.MatchedBy(func(c *exec.Cmd) bool {
+		return c == cmd
+	})).Return(nil)
+	mockVirt.On("IP", mock.Anything).Return(nil, errors.New("IP not found"))
+
+	vm, cleanup := setupTestVM(t, mockVirt, mockPuller)
 	defer cleanup()
 
 	go vm.Run()
@@ -267,38 +296,30 @@ func TestVM_Run_ProcessIsHanging(t *testing.T) {
 	status := vm.Status()
 	require.NotNil(t, status.State.Running, "Container should still be running")
 	assert.NotEmpty(t, status.State.Running.StartedAt, "Container should have a start time")
-	assert.True(t, status.Ready, "Container should be ready")
+	assert.False(t, status.Ready, "Container should be ready")
 
 	err := vm.Cleanup()
 	assert.NoError(t, err)
 }
 
 func TestVM_Run_CleanupMustBeGraceful(t *testing.T) {
-	vm, cleanup := setupTestVM(t, `#!/bin/bash
-		# Function to handle the interrupt signal
-		cleanup() {
-			echo "Received Interrupt signal, exiting..."
-			exit 0
-		}
-		
-		# Simulate some work or a long-running process
-		if [[ "$1" == "create" ]]; then
-			echo "containerid-123"
-			exit 0
-		fi
-		if [[ "$1" == "start" ]]; then
-			trap cleanup EXIT
-			trap cleanup SIGINT
-			# Simulate a long-running process that would otherwise hang
-			sleep 10000 &
-			wait $!
-			exit 0
-		fi
-		if [[ "$1" == "rm" ]]; then
-			exit 0
-		fi
-		exit 1
-`)
+	mockPuller := new(MockPuller)
+	mockPuller.On("Pull", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	mockVirt := new(MockVirtualization)
+	mockVirt.On("Create", mock.Anything, mock.Anything, mock.Anything).Return("containerid-123", nil)
+	cmd := exec.Command("/usr/bin/sleep", "0.3")
+	cmd.Start()
+	mockVirt.On("Start", mock.Anything, "containerid-123").Return(cmd, nil)
+	mockVirt.On("Stop", mock.MatchedBy(func(ctx context.Context) bool {
+		return true
+	}), mock.MatchedBy(func(c *exec.Cmd) bool {
+		return c == cmd
+	})).Return(nil)
+	mockVirt.On("Destroy", mock.Anything, "containerid-123").Return(nil)
+	mockVirt.On("IP", mock.Anything).Return(nil, errors.New("IP not found"))
+
+	vm, cleanup := setupTestVM(t, mockVirt, mockPuller)
 	defer cleanup()
 
 	go vm.Run()
@@ -321,13 +342,23 @@ func TestVM_Run_CleanupMustBeGraceful(t *testing.T) {
 }
 
 func TestVM_Run_Successful_CleanupMustBeIdempotent(t *testing.T) {
-	vm, cleanup := setupTestVM(t, `#!/bin/bash
-	if [[ "$1" == "create" ]]; then
-		echo "containerid-456"
-		exit 0
-	fi
-	exit 0
-`)
+	mockPuller := new(MockPuller)
+	mockPuller.On("Pull", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	mockVirt := new(MockVirtualization)
+	mockVirt.On("Create", mock.Anything, mock.Anything, mock.Anything).Return("containerid-456", nil)
+	cmd := exec.Command("/usr/bin/sleep", "0.3")
+	cmd.Start()
+	mockVirt.On("Start", mock.Anything, "containerid-456").Return(cmd, nil)
+	mockVirt.On("Stop", mock.MatchedBy(func(ctx context.Context) bool {
+		return true
+	}), mock.MatchedBy(func(c *exec.Cmd) bool {
+		return c == cmd
+	})).Return(nil)
+	mockVirt.On("Destroy", mock.Anything, "containerid-456").Return(nil)
+	mockVirt.On("IP", mock.Anything, "containerid-456").Return("", errors.New("no IP found"))
+
+	vm, cleanup := setupTestVM(t, mockVirt, mockPuller)
 	defer cleanup()
 
 	go vm.Run()

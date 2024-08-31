@@ -87,7 +87,7 @@ func (s *Virtualization) Stop(ctx context.Context, containerRunCmd *exec.Cmd) er
 	}
 }
 
-func (s *Virtualization) Remove(ctx context.Context, containerID string) error {
+func (s *Virtualization) Destroy(ctx context.Context, containerID string) error {
 	err := exec.CommandContext(ctx, s.curieBinaryPath, "rm", containerID).Run()
 	log.Printf("removed container '%v': err=%v", containerID, err)
 	return err
