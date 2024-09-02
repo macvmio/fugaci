@@ -3,6 +3,7 @@ package curie
 import (
 	"context"
 	"errors"
+	"fmt"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"net"
 	"os"
@@ -163,25 +164,56 @@ func TestVirtualization_Stop_processDidNotExitWithin5Seconds(t *testing.T) {
 	assert.Error(t, errors.New("process did not exit within 5 seconds"))
 }
 
-func TestVirtualization_Stop_mustReactToSigInt(t *testing.T) {
-	scriptContent := `#!/bin/bash
-		wait`
-	scriptPath, err := createTestScript(scriptContent)
-	assert.NoError(t, err)
-	defer removeTestScript(scriptPath)
+func TestVirtualization_Stop_mustReactToSIGTERM(t *testing.T) {
 
-	v := NewVirtualization(scriptPath)
-	cmd, err := v.Start(context.Background(), "container123")
-	assert.NoError(t, err)
-
-	go func() {
-		err := cmd.Wait()
+	testStopLogic := func(t *testing.T) error {
+		scriptContent := `#!/bin/bash
+		# Function to handle the interrupt signal
+		cleanup() {
+			echo "Received Interrupt signal, exiting..."
+			exit 0
+		}
+		trap cleanup EXIT
+		trap cleanup SIGTERM
+		# Simulate a long-running process
+		sleep 10000 &
+		wait $!
+		exit 0
+`
+		scriptPath, err := createTestScript(scriptContent)
 		assert.NoError(t, err)
-	}()
-	time.Sleep(100 * time.Millisecond)
+		defer removeTestScript(scriptPath)
 
-	err = v.Stop(context.Background(), cmd)
-	assert.Error(t, errors.New("process did not exit within 5 seconds"))
+		v := NewVirtualization(scriptPath)
+		cmd, err := v.Start(context.Background(), "container123")
+		assert.NoError(t, err)
+
+		go func() {
+			err := cmd.Wait()
+			assert.NoError(t, err)
+		}()
+		time.Sleep(60 * time.Millisecond)
+
+		err = v.Stop(context.Background(), cmd)
+		assert.NoError(t, err)
+		assert.Equal(t, 0, cmd.ProcessState.ExitCode())
+		fmt.Printf("exit code: %v\n", cmd.ProcessState.ExitCode())
+		return err
+	}
+
+	for i := 0; i < 10; i++ { // Run the test logic 10 times
+		t.Run("iteration", func(t *testing.T) {
+			// Place your test logic here
+			t.Logf("Running iteration %d", i+1)
+
+			// Example: Replace with actual test logic
+			err := testStopLogic(t)
+			if err != nil {
+				t.Errorf("Test failed on iteration %d: %v", i+1, err)
+			}
+		})
+	}
+
 }
 
 func TestVirtualization_Remove(t *testing.T) {

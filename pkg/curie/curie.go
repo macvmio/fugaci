@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -60,31 +61,36 @@ func (s *Virtualization) Stop(ctx context.Context, containerRunCmd *exec.Cmd) er
 	}
 
 	// Send the interrupt signal to the process
-	err := containerRunCmd.Process.Signal(os.Interrupt)
+	log.Printf("sending SIGTERM to process %d", containerRunCmd.Process.Pid)
+	err := containerRunCmd.Process.Signal(syscall.SIGTERM)
 	if errors.Is(err, os.ErrProcessDone) {
+		log.Printf("process %d terminated", containerRunCmd.Process.Pid)
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("unable to send os.Interrupt: %w", err)
+		return fmt.Errorf("unable to send SIGTERM signal: %w", err)
 	}
+	start := time.Now()
 
-	// Create a channel to wait for the process to exit
-	done := make(chan error, 1)
-	go func() {
-		done <- containerRunCmd.Wait()
-	}()
-
-	// Use a select statement to wait for either the process to exit or the timeout
-	select {
-	case <-time.After(5 * time.Second):
-		return fmt.Errorf("process did not exit within 5 seconds")
-	case err := <-done:
-		if err != nil {
-			return fmt.Errorf("process exited with error: %w", err)
+	for {
+		p, err := os.FindProcess(containerRunCmd.Process.Pid)
+		if err == nil {
+			// probe the process to check if it's REALLY alive
+			err := p.Signal(syscall.Signal(0))
+			if err != nil {
+				log.Printf("process %d exited after %v with code %d, waitStatus %d\n",
+					containerRunCmd.Process.Pid, time.Now().Sub(start),
+					containerRunCmd.ProcessState.ExitCode(),
+					containerRunCmd.ProcessState.Sys())
+				break
+			}
 		}
-		log.Printf("container '%s' stopped successfully", containerRunCmd)
-		return nil
+		time.Sleep(25 * time.Millisecond)
+		if time.Now().Sub(start) > 5*time.Second {
+			return fmt.Errorf("process did not exit after 5 seconds")
+		}
 	}
+	return nil
 }
 
 func (s *Virtualization) Destroy(ctx context.Context, containerID string) error {

@@ -93,6 +93,7 @@ func (s *VM) GetContainerStatus() v1.ContainerStatus {
 }
 
 func (s *VM) terminate(reason string, err error) {
+	log.Printf("vm terminated because '%s' and err=%v", reason, err)
 	prevStatus := s.GetContainerStatus()
 	st := v1.ContainerState{Terminated: &v1.ContainerStateTerminated{
 		ExitCode:    1,
@@ -178,11 +179,12 @@ func (s *VM) Run() {
 	go s.observeIP(s.lifetimeCtx, containerID)
 	err = runCmd.Wait()
 	if err != nil {
+		log.Printf("ProcessState at exit: %v, code=%d", runCmd.ProcessState.String(), runCmd.ProcessState.ExitCode())
 		s.terminate("error while running container", fmt.Errorf("'%s' command failed: %w", runCmd, err))
 		return
 	}
 
-	log.Printf("container '%v' finished successfully: %v", containerID, runCmd)
+	log.Printf("container '%v' finished successfully: %v, exit code=%d\n", containerID, runCmd, runCmd.ProcessState.ExitCode())
 	s.updateState(v1.ContainerState{Terminated: &v1.ContainerStateTerminated{
 		ExitCode:    int32(runCmd.ProcessState.ExitCode()),
 		Reason:      "exited successfully",
@@ -201,7 +203,6 @@ func (s *VM) Status() v1.ContainerStatus {
 }
 
 func (s *VM) Cleanup() error {
-	s.cancelFunc(errors.New("aborted by user"))
 	err := s.virt.Stop(context.Background(), s.runCmd)
 	if err == nil {
 		log.Printf("stopped VM gracefully")
@@ -212,6 +213,7 @@ func (s *VM) Cleanup() error {
 	if err != nil && !errors.Is(err, os.ErrProcessDone) {
 		return err
 	}
+	s.cancelFunc(errors.New("aborted by user"))
 	log.Printf("waiting for lifetimeCtx...\n")
 	<-s.lifetimeCtx.Done()
 	return s.virt.Destroy(context.Background(), s.Status().ContainerID)

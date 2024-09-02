@@ -8,7 +8,7 @@ spec:
       imagePullPolicy: Always
       command: [ "test123" ]
       name: nanoserver
-  restartPolicy: OnFailure
+  restartPolicy: Always
   nodeSelector:
     kubernetes.io/os: darwin
   tolerations:
