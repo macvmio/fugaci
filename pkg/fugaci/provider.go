@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/creack/pty"
 	io_prometheus_client "github.com/prometheus/client_model/go"
 	"github.com/tomekjarosik/fugaci/pkg/curie"
 	"github.com/virtual-kubelet/node-cli/manager"
@@ -13,11 +12,13 @@ import (
 	"github.com/virtual-kubelet/virtual-kubelet/node/api"
 	"github.com/virtual-kubelet/virtual-kubelet/node/api/statsv1alpha1"
 	"github.com/virtual-kubelet/virtual-kubelet/node/nodeutil"
+	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/terminal"
 	"io"
 	v1 "k8s.io/api/core/v1"
 	"log"
 	"os"
-	"os/exec"
+	"strings"
 	"sync"
 )
 
@@ -84,6 +85,27 @@ func (s *Provider) findVM(pod *v1.Pod) (*VM, error) {
 		}
 		if s.vms[i].pod.UID == pod.UID {
 			return s.vms[i], nil
+		}
+	}
+	return nil, errors.New("not found")
+}
+
+func (s *Provider) findVMByNames(namespace, podName, containerName string) (*VM, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := 0; i < len(s.vms); i++ {
+		if s.vms[i] == nil {
+			continue
+		}
+		// TODO: Add container name
+		vm := s.vms[i]
+		if vm.pod.Name == podName && vm.pod.Namespace == namespace {
+			/*for _, status := range vm.pod.Status.ContainerStatuses {
+				if status.Name == containerName {
+					return vm, nil
+				}
+			}*/
+			return vm, nil
 		}
 	}
 	return nil, errors.New("not found")
@@ -179,61 +201,113 @@ func (s *Provider) GetContainerLogs(ctx context.Context, namespace, podName, con
 	panic("implement me")
 }
 
-func handleResize(tty *os.File, resizeCh <-chan api.TermSize) {
-	for size := range resizeCh {
-		// Handle TTY resize here
-		pty.Setsize(tty, &pty.Winsize{Cols: size.Width, Rows: size.Height})
+// shellQuote properly quotes a string for use in a shell command
+func shellQuote(s string) string {
+	// Use single quotes if the string contains spaces or special characters
+	if strings.ContainsAny(s, " '\"\\$`") {
+		return fmt.Sprintf("'%s'", strings.ReplaceAll(s, "'", "'\"'\"'"))
 	}
+	return s
 }
 
 func (s *Provider) RunInContainer(ctx context.Context, namespace, podName, containerName string, cmd []string, attach api.AttachIO) error {
-	// Create the exec.CommandContext
-	// Set the Stdin, Stdout, Stderr from the AttachIO interface
-	execCmd := exec.CommandContext(ctx, cmd[0], cmd[1:]...)
-	// Set the Stdin, Stdout, Stderr from the AttachIO interface
-	execCmd.Stdin = attach.Stdin()
-	execCmd.Stdout = attach.Stdout()
-	execCmd.Stderr = attach.Stderr()
-	// If TTY is enabled, use a pty (pseudo-terminal)
-	if attach.TTY() {
-		// TTY handling can be more complex, requiring packages like github.com/kr/pty
-		// For simplicity, this is a placeholder; real TTY support would require more setup
-		// Example using pty (pseudo-terminal):
-		pty, tty, err := pty.Open()
+	vm, err := s.findVMByNames(namespace, podName, containerName)
+	if err != nil {
+		return fmt.Errorf("failed to find VM for pod %s/%s: %w", namespace, podName, err)
+	}
+	if len(vm.pod.Status.PodIP) == 0 {
+		return fmt.Errorf("pod %s/%s has no IP address", namespace, podName)
+	}
+	// SSH client configuration
+	config := &ssh.ClientConfig{
+		User: "agent",
+		Auth: []ssh.AuthMethod{
+			ssh.Password("password"),
+		},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	}
+
+	address := fmt.Sprintf("%s:22", vm.pod.Status.PodIP)
+	client, err := ssh.Dial("tcp", address, config)
+	if err != nil {
+		return fmt.Errorf("failed to dial SSH to '%s': %w", address, err)
+	}
+	defer client.Close()
+
+	// Create a session for running the command
+	session, err := client.NewSession()
+	if err != nil {
+		return fmt.Errorf("failed to create SSH session: %w", err)
+	}
+	defer session.Close()
+
+	// Set up the input/output streams
+	session.Stdin = attach.Stdin()
+	session.Stdout = attach.Stdout()
+	session.Stderr = attach.Stderr()
+
+	fileDescriptor := int(os.Stdin.Fd())
+	if terminal.IsTerminal(fileDescriptor) {
+		originalState, err := terminal.MakeRaw(fileDescriptor)
 		if err != nil {
-			return fmt.Errorf("failed to open pty: %w", err)
+			return err
 		}
-		defer pty.Close()
-		execCmd.Stdin = tty
-		execCmd.Stdout = tty
-		execCmd.Stderr = tty
-		go handleResize(tty, attach.Resize()) // Resize handler
+		defer terminal.Restore(fileDescriptor, originalState)
+	}
+	// Handle TTY if needed
+	if attach.TTY() {
+		log.Printf("TTY attached to pod %s/%s", namespace, podName)
+		modes := ssh.TerminalModes{
+			ssh.ECHO:          1,     // enable echoing
+			ssh.TTY_OP_ISPEED: 14400, // input speed = 14.4kbaud
+			ssh.TTY_OP_OSPEED: 14400, // output speed = 14.4kbaud
+		}
+
+		if err := session.RequestPty("xterm-256color", 80, 40, modes); err != nil {
+			return fmt.Errorf("request for pseudo terminal failed: %w", err)
+		}
+		go handleResize(session, attach.Resize())
 	}
 
-	// Use a WaitGroup to wait for the command to complete and handle streams closure
+	// Quote each argument to handle spaces and special characters
+	for i, arg := range cmd {
+		cmd[i] = shellQuote(arg)
+	}
+
+	// Join the command and arguments into a single string
+	commandStr := strings.Join(cmd, " ")
+	// Start the command
+	err = session.Start(commandStr)
+	if err != nil {
+		return fmt.Errorf("failed to start command: %w", err)
+	}
+
+	// Use a WaitGroup to wait for the command to complete
 	var wg sync.WaitGroup
-
-	// Close the output streams when done
-	if stdout := attach.Stdout(); stdout != nil {
-		defer stdout.Close()
-	}
-	if stderr := attach.Stderr(); stderr != nil {
-		defer stderr.Close()
-	}
-
-	// Run the command asynchronously
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if err := execCmd.Run(); err != nil {
-			fmt.Printf("failed to execute command in container: %v\n", err)
+		if err := session.Wait(); err != nil {
+			fmt.Printf("failed to execute command over SSH: %v\n", err)
 		}
 	}()
 
-	// Wait for command execution to finish
+	// Wait for the command to finish
 	wg.Wait()
 
 	return nil
+
+	return nil
+}
+
+// handleResize listens for resize events from the resize channel and adjusts the terminal size accordingly.
+func handleResize(session *ssh.Session, resize <-chan api.TermSize) {
+	for termSize := range resize {
+		// Send the window change request to the SSH session with the new terminal size
+		if err := session.WindowChange(int(termSize.Height), int(termSize.Width)); err != nil {
+			log.Printf("failed to change window size: %v\n", err)
+		}
+	}
 }
 
 func (s *Provider) AttachToContainer(ctx context.Context, namespace, podName, containerName string, attach api.AttachIO) error {
