@@ -245,6 +245,8 @@ func (s *VM) observeIP(ctx context.Context, containerID string) {
 			s.updatePodIP(ip)
 			s.updateStatus(func(st *v1.ContainerStatus) {
 				st.Ready = true
+				v := true
+				st.Started = &v
 			})
 		}
 	}

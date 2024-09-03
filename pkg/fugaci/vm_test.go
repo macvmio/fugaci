@@ -262,7 +262,9 @@ func TestVM_Run_Successful_mustBeReadyWithIPAddress(t *testing.T) {
 			continue
 		}
 		assert.True(t, status.Ready)
+		assert.True(t, *status.Started)
 		assert.Equal(t, "1.2.3.4", vm.GetPod().Status.PodIP)
+		assert.Equal(t, v1.PodRunning, vm.GetPod().Status.Phase)
 		break
 	}
 
