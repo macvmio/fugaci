@@ -93,7 +93,7 @@ func (s *VM) GetContainerStatus() v1.ContainerStatus {
 }
 
 func (s *VM) terminate(reason string, err error) {
-	log.Printf("vm terminated because '%s' and err=%v", reason, err)
+	log.Printf("vm terminated because '%s': %v", reason, err)
 	prevStatus := s.GetContainerStatus()
 	st := v1.ContainerState{Terminated: &v1.ContainerStateTerminated{
 		ExitCode:    1,
@@ -133,8 +133,8 @@ func (s *VM) Run() {
 		})
 	}()
 
-	s.updateState(v1.ContainerState{Waiting: &v1.ContainerStateWaiting{Reason: "Pulling"}})
 	if len(s.GetContainerStatus().ContainerID) == 0 {
+		s.updateState(v1.ContainerState{Waiting: &v1.ContainerStateWaiting{Reason: "Pulling"}})
 		err := s.puller.Pull(s.lifetimeCtx, s.containerSpec().Image, s.containerSpec().ImagePullPolicy)
 		if err != nil {
 			s.terminate("unable to pull image", err)
@@ -161,6 +161,7 @@ func (s *VM) Run() {
 			st.RestartCount += 1
 		})
 	}
+	s.updateState(v1.ContainerState{Waiting: &v1.ContainerStateWaiting{Reason: "starting"}})
 	containerID := s.GetContainerStatus().ContainerID
 	runCmd, err := s.virt.Start(s.lifetimeCtx, containerID)
 	if err != nil {
@@ -203,20 +204,27 @@ func (s *VM) Status() v1.ContainerStatus {
 }
 
 func (s *VM) Cleanup() error {
-	err := s.virt.Stop(context.Background(), s.runCmd)
+	stopCtx, cancelStopCtx := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelStopCtx()
+	err := s.virt.Stop(stopCtx, s.runCmd)
 	if err == nil {
 		log.Printf("stopped VM gracefully")
-		return nil
+	} else {
+		log.Printf("failed to stop VM gracefully '%v': %v\n", s.runCmd, err)
+		err = s.runCmd.Process.Kill()
+		if err != nil && !errors.Is(err, os.ErrProcessDone) {
+			return err
+		}
 	}
-	log.Printf("failed to stop container gracefully '%v': %v\n", s.runCmd, err)
-	err = s.runCmd.Process.Kill()
-	if err != nil && !errors.Is(err, os.ErrProcessDone) {
-		return err
-	}
+
 	s.cancelFunc(errors.New("aborted by user"))
 	log.Printf("waiting for lifetimeCtx...\n")
 	<-s.lifetimeCtx.Done()
-	return s.virt.Destroy(context.Background(), s.Status().ContainerID)
+	st := s.Status()
+	if len(st.ContainerID) > 0 {
+		return s.virt.Destroy(context.Background(), s.Status().ContainerID)
+	}
+	return nil
 }
 
 func (s *VM) observeIP(ctx context.Context, containerID string) {

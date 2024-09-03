@@ -73,24 +73,28 @@ func (s *Virtualization) Stop(ctx context.Context, containerRunCmd *exec.Cmd) er
 	start := time.Now()
 
 	for {
-		p, err := os.FindProcess(containerRunCmd.Process.Pid)
-		if err == nil {
-			// probe the process to check if it's REALLY alive
-			err := p.Signal(syscall.Signal(0))
-			if err != nil {
-				log.Printf("process %d exited after %v with code %d, waitStatus %d\n",
-					containerRunCmd.Process.Pid, time.Now().Sub(start),
-					containerRunCmd.ProcessState.ExitCode(),
-					containerRunCmd.ProcessState.Sys())
-				break
+		select {
+		case <-ctx.Done():
+			// Context has timed out
+			return fmt.Errorf("process still did not exit after %v", time.Since(start).Round(time.Second))
+		default:
+			// Check if the process is still running
+			p, err := os.FindProcess(containerRunCmd.Process.Pid)
+			if err == nil {
+				// Probe the process to check if it's really alive
+				err := p.Signal(syscall.Signal(0))
+				_ = p.Release()
+				if errors.Is(err, os.ErrProcessDone) {
+					log.Printf("process %d exited after %v with code %d, waitStatus %d\n",
+						containerRunCmd.Process.Pid, time.Since(start),
+						containerRunCmd.ProcessState.ExitCode(),
+						containerRunCmd.ProcessState.Sys())
+					return nil
+				}
 			}
-		}
-		time.Sleep(25 * time.Millisecond)
-		if time.Now().Sub(start) > 5*time.Second {
-			return fmt.Errorf("process did not exit after 5 seconds")
+			time.Sleep(25 * time.Millisecond)
 		}
 	}
-	return nil
 }
 
 func (s *Virtualization) Destroy(ctx context.Context, containerID string) error {

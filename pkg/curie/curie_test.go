@@ -122,8 +122,9 @@ func TestVirtualization_Create(t *testing.T) {
 func TestVirtualization_Start(t *testing.T) {
 	scriptContent := `#!/bin/bash
 	if [ "$1" == "start" ]; then
-		sleep 5
+		sleep 0.1
 		echo "started"
+		exit 0
 	else
 		exit 1
 	fi`
@@ -135,17 +136,20 @@ func TestVirtualization_Start(t *testing.T) {
 	cmd, err := v.Start(context.Background(), "container123")
 	assert.NoError(t, err)
 
-	go func() {
-		err := cmd.Wait()
-		assert.NoError(t, err)
-	}()
-	time.Sleep(1 * time.Second)
-	assert.Nil(t, cmd.Process.Signal(os.Interrupt))
+	err = cmd.Wait()
+	assert.NoError(t, err)
 }
 
-func TestVirtualization_Stop_processDidNotExitWithin5Seconds(t *testing.T) {
+func TestVirtualization_Stop_whenProcessIsHanging_mustBeKilledAfterGracePeriod(t *testing.T) {
 	scriptContent := `#!/bin/bash
-		sleep 10`
+		cleanup() {
+			echo "Received Interrupt signal, exiting..."
+			exit 78
+		}
+		trap cleanup SIGTERM
+		sleep 10
+		exit 78
+`
 	scriptPath, err := createTestScript(scriptContent)
 	assert.NoError(t, err)
 	defer removeTestScript(scriptPath)
@@ -159,16 +163,17 @@ func TestVirtualization_Stop_processDidNotExitWithin5Seconds(t *testing.T) {
 		assert.NoError(t, err)
 	}()
 	time.Sleep(100 * time.Millisecond)
-
-	err = v.Stop(context.Background(), cmd)
-	assert.Error(t, errors.New("process did not exit within 5 seconds"))
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	err = v.Stop(ctx, cmd)
+	assert.Equal(t, err, errors.New("process still did not exit after 1s"))
+	assert.Nil(t, cmd.ProcessState)
 }
 
-func TestVirtualization_Stop_mustReactToSIGTERM(t *testing.T) {
+func TestVirtualization_Stop_mustReactToSIGTERM_andStopGracefully(t *testing.T) {
 
 	testStopLogic := func(t *testing.T) error {
 		scriptContent := `#!/bin/bash
-		# Function to handle the interrupt signal
 		cleanup() {
 			echo "Received Interrupt signal, exiting..."
 			exit 0
@@ -193,8 +198,9 @@ func TestVirtualization_Stop_mustReactToSIGTERM(t *testing.T) {
 			assert.NoError(t, err)
 		}()
 		time.Sleep(60 * time.Millisecond)
-
-		err = v.Stop(context.Background(), cmd)
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		defer cancel()
+		err = v.Stop(ctx, cmd)
 		assert.NoError(t, err)
 		assert.Equal(t, 0, cmd.ProcessState.ExitCode())
 		fmt.Printf("exit code: %v\n", cmd.ProcessState.ExitCode())

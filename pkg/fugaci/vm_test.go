@@ -3,6 +3,7 @@ package fugaci
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -284,10 +285,12 @@ func TestVM_Run_ProcessIsHanging(t *testing.T) {
 
 	mockVirt.On("IP", mock.Anything).Unset()
 	mockVirt.On("IP", mock.Anything).Return(nil, errors.New("IP not found"))
+	mockVirt.On("Stop", mock.Anything, mock.Anything, mock.Anything).Unset()
 
-	cmd := exec.Command("/usr/bin/sleep", "0.3")
+	cmd := exec.Command("/usr/bin/sleep", "30")
 	cmd.Start()
 	mockVirt.On("Start", mock.Anything, "containerid-123").Return(cmd, nil)
+	mockVirt.On("Stop", mock.Anything, mock.Anything, mock.Anything).Return(errors.New("unable to stop VM"))
 
 	go vm.Run()
 
@@ -296,7 +299,7 @@ func TestVM_Run_ProcessIsHanging(t *testing.T) {
 		if status.State.Running != nil {
 			break
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 	}
 
 	status := vm.Status()
@@ -306,9 +309,23 @@ func TestVM_Run_ProcessIsHanging(t *testing.T) {
 
 	err := vm.Cleanup()
 	assert.NoError(t, err)
+
+	for {
+		status := vm.Status()
+		if status.State.Terminated != nil {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	status = vm.Status()
+	require.NotNil(t, status.State.Terminated, "Container should still be running")
+	assert.NotEmpty(t, status.State.Terminated.StartedAt, "Container should have a start time")
+	assert.Equal(t, "error while running container", status.State.Terminated.Reason)
+	assert.Equal(t, "'/usr/bin/sleep 30' command failed: signal: killed", status.State.Terminated.Message)
+	assert.False(t, status.Ready, "Container should not be ready")
 }
 
-func TestVM_Run_CleanupMustBeGraceful(t *testing.T) {
+func TestVM_Run_Success_CleanupMustBeGraceful(t *testing.T) {
 	vm, mockVirt, _, cleanup := setupCommonTestVM(t, noPodOverride)
 	defer cleanup()
 
@@ -360,4 +377,33 @@ func TestVM_Run_Successful_CleanupMustBeIdempotent(t *testing.T) {
 	assert.NoError(t, err)
 	err = vm.Cleanup()
 	assert.NoError(t, err)
+}
+
+func TestVM_Cleanup_CalledWhilePulling_mustExitQuickly(t *testing.T) {
+	vm, _, mockPuller, cleanup := setupCommonTestVM(t, noPodOverride)
+	defer cleanup()
+
+	mockPuller.On("Create", mock.Anything, mock.Anything, mock.Anything).Unset()
+	mockPuller.On("Pull", mock.Anything, mock.Anything, mock.Anything).Unset()
+	// Simulate a Pull function that blocks, waiting on the context
+	mockPuller.On("Pull", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		// Extract the context from the arguments
+		ctx := args.Get(0).(context.Context)
+
+		// Wait until the context is canceled or done
+		fmt.Printf("simulating that pull is waiting on context cancellation\n")
+		<-ctx.Done()
+		fmt.Printf("simulating that pull is waiting on context cancellation: finished\n")
+	}).Return(errors.New("context cancelled"))
+
+	go vm.Run()
+	time.Sleep(20 * time.Millisecond)
+
+	err := vm.Cleanup()
+	assert.NoError(t, err)
+	time.Sleep(20 * time.Millisecond)
+	status := vm.Status()
+	require.NotNil(t, status.State.Terminated)
+	assert.Equal(t, "unable to pull image", status.State.Terminated.Reason)
+	assert.Contains(t, status.State.Terminated.Message, "context cancelled")
 }
