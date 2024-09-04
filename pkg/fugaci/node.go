@@ -1,11 +1,14 @@
 package fugaci
 
 import (
+	"fmt"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -85,7 +88,102 @@ func (s *Node) OperatingSystem() string {
 	return runtime.GOOS
 }
 
+func (s *Node) Architecture() string {
+	return runtime.GOARCH
+}
+
+func (s *Node) GetKernelVersion() string {
+	output, err := sysctlN("kern.version")
+	if err != nil {
+		return "unknown"
+	}
+	return strings.TrimSpace(output)
+}
+
+func (s *Node) GetOSImage() string {
+	// Check the operating system at runtime
+	switch runtime.GOOS {
+	case "darwin": // macOS
+		return s.getMacOSImage()
+	case "linux": // Linux
+		return "TODO"
+	default:
+		return "unknown"
+	}
+}
+
+// Get macOS image using sw_vers for product version and build version
+func (s *Node) getMacOSImage() string {
+	productVersion, err := exec.Command("sw_vers", "--productVersion").Output()
+	if err != nil {
+		return "unknown"
+	}
+	buildVersion, err := exec.Command("sw_vers", "--buildVersion").Output()
+	if err != nil {
+		return "unknown"
+	}
+
+	return fmt.Sprintf("macOS %s (Build %s)", strings.TrimSpace(string(productVersion)), strings.TrimSpace(string(buildVersion)))
+}
+
+// sysctlSettings is the list of sysctl parameters that we want to query
+var sysctlSettings = []string{
+	"kern.ostype",
+	"kern.osrelease",
+	"kern.osversion",
+	"kern.hostname",
+	"hw.machine",
+	"hw.model",
+	"hw.ncpu",
+	"hw.physicalcpu",
+	"hw.logicalcpu",
+	"hw.memsize",
+	"hw.cpufrequency",
+	"hw.l1icachesize",
+	"hw.l1dcachesize",
+	"hw.l2cachesize",
+	"hw.l3cachesize",
+	"vm.swapusage",
+	"net.inet.ip.forwarding",
+	"net.inet.tcp.rfc1323",
+	"net.inet.tcp.keepidle",
+	"net.inet.tcp.sendspace",
+	"net.inet.tcp.recvspace",
+	"vfs.usermount",
+	"vfs.generic.iosize",
+	"kern.maxproc",
+	"kern.maxfiles",
+	"kern.maxfilesperproc",
+	"machdep.cpu.brand_string",
+	"machdep.cpu.features",
+}
+
+// sysctlN runs `sysctl -n <name>` and returns the result as a string
+func sysctlN(name string) (string, error) {
+	// Execute sysctl command
+	output, err := exec.Command("sysctl", "-n", name).Output()
+	if err != nil {
+		return "", err
+	}
+	// Return the trimmed output to remove any extra whitespace
+	return strings.TrimSpace(string(output)), nil
+}
+
+// getSysctlInfo returns a map where the key is "sysctl.<name>" and the value is the result of `sysctl -n <name>`
+func addSysctlInfo(sysctlMap map[string]string) map[string]string {
+	// Loop through the sysctlSettings array and call sysctlN for each
+	for _, setting := range sysctlSettings {
+		value, err := sysctlN(setting)
+		if err == nil && len(value) > 0 {
+			sysctlMap[setting] = value
+		}
+	}
+
+	return sysctlMap
+}
+
 func (s *Node) Configure(node *corev1.Node) {
+
 	node.Spec.Taints = append(node.Spec.Taints, v1.Taint{
 		Key:    "fugaci.jarosik.online",
 		Value:  "true",
@@ -97,8 +195,18 @@ func (s *Node) Configure(node *corev1.Node) {
 	node.Status.Addresses = s.addresses()
 	node.Status.DaemonEndpoints = s.daemonEndpoints()
 	node.Status.NodeInfo.OperatingSystem = s.OperatingSystem()
-	node.ObjectMeta.Labels = make(map[string]string)
+	node.Status.NodeInfo.OSImage = s.GetOSImage()
+	node.Status.NodeInfo.KernelVersion = s.GetKernelVersion()
+	node.Status.NodeInfo.Architecture = s.Architecture()
+	if node.ObjectMeta.Labels == nil {
+		node.ObjectMeta.Labels = map[string]string{}
+	}
 	node.ObjectMeta.Labels["kubernetes.io/os"] = s.OperatingSystem()
+	// some useful annotation, not needed for correctness
+	if node.ObjectMeta.Annotations == nil {
+		node.ObjectMeta.Annotations = map[string]string{}
+	}
+	addSysctlInfo(node.ObjectMeta.Annotations)
 }
 
 func NewNode(cfg Config) Node {
