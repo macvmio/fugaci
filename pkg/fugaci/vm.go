@@ -46,6 +46,7 @@ type VM struct {
 	runCmd      *exec.Cmd
 
 	mu sync.Mutex
+	wg sync.WaitGroup
 }
 
 func NewVM(virt Virtualization, puller Puller, pod *v1.Pod, containerIndex int) (*VM, error) {
@@ -128,6 +129,9 @@ func (s *VM) containerSpec() v1.Container {
 }
 
 func (s *VM) Run() {
+	s.wg.Add(1)
+	defer s.wg.Done()
+
 	defer func() {
 		s.updateStatus(func(st *v1.ContainerStatus) {
 			st.Ready = false
@@ -223,11 +227,12 @@ func (s *VM) Cleanup() error {
 	}
 
 	s.cancelFunc(errors.New("aborted by user"))
-	log.Printf("waiting for lifetimeCtx...\n")
-	<-s.lifetimeCtx.Done()
+	log.Printf("waiting for vm.Run() to complete its operations\n")
+	s.wg.Wait()
 	st := s.Status()
 	if len(st.ContainerID) > 0 {
-		return s.virt.Destroy(context.Background(), s.Status().ContainerID)
+		log.Printf("cleaning up ephemeral container %v", st.ContainerID)
+		return s.virt.Destroy(context.Background(), st.ContainerID)
 	}
 	return nil
 }
@@ -262,5 +267,7 @@ func (s *VM) Matches(namespace, name string) bool {
 }
 
 func (s *VM) GetPod() *v1.Pod {
+	s.mu.Lock()
+	s.mu.Unlock()
 	return s.pod.DeepCopy()
 }
