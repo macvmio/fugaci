@@ -325,6 +325,7 @@ func (s *VM) GetSSHConfig() (*ssh.ClientConfig, error) {
 			ssh.Password(password),
 		},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         10 * time.Second,
 	}, nil
 }
 

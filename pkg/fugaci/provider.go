@@ -13,11 +13,9 @@ import (
 	"github.com/virtual-kubelet/virtual-kubelet/node/api/statsv1alpha1"
 	"github.com/virtual-kubelet/virtual-kubelet/node/nodeutil"
 	"golang.org/x/crypto/ssh"
-	"golang.org/x/crypto/ssh/terminal"
 	"io"
 	v1 "k8s.io/api/core/v1"
 	"log"
-	"os"
 	"strings"
 	"sync"
 )
@@ -237,14 +235,6 @@ func (s *Provider) RunInContainer(ctx context.Context, namespace, podName, conta
 	session.Stdout = attach.Stdout()
 	session.Stderr = attach.Stderr()
 
-	fileDescriptor := int(os.Stdin.Fd())
-	if terminal.IsTerminal(fileDescriptor) {
-		originalState, err := terminal.MakeRaw(fileDescriptor)
-		if err != nil {
-			return err
-		}
-		defer terminal.Restore(fileDescriptor, originalState)
-	}
 	// Handle TTY if needed
 	if attach.TTY() {
 		log.Printf("TTY attached to pod %s/%s", namespace, podName)
@@ -267,26 +257,8 @@ func (s *Provider) RunInContainer(ctx context.Context, namespace, podName, conta
 
 	// Join the command and arguments into a single string
 	commandStr := strings.Join(cmd, " ")
-	// Start the command
-	err = session.Start(commandStr)
-	if err != nil {
-		return fmt.Errorf("failed to start command: %w", err)
-	}
 
-	// Use a WaitGroup to wait for the command to complete
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		if err := session.Wait(); err != nil {
-			fmt.Printf("failed to execute command over SSH: %v\n", err)
-		}
-	}()
-
-	// Wait for the command to finish
-	wg.Wait()
-
-	return nil
+	return session.Run(commandStr)
 }
 
 // handleResize listens for resize events from the resize channel and adjusts the terminal size accordingly.

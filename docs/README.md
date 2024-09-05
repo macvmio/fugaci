@@ -23,3 +23,11 @@ spec:
         name: fugaci-ssh-secret
     command: ["/bin/sh", "-c", "env | grep FUGACI"]
 ```
+
+
+
+### Get shell in a container
+
+```shell
+kubectl exec --stdin --tty shell-demo -- /bin/bash
+```
