@@ -5,17 +5,12 @@ metadata:
 spec:
   containers:
     - image: macvm.store/repo/base-runner:1.3
-      imagePullPolicy: Always
+      imagePullPolicy: Never
       command: [ "test123" ]
-      name: nanoserver
-      env:
-        - name: SAMPLE_ENV_VAR
-          value: "plain-text-value"
-        - name: SECRET_API_KEY
-          valueFrom:
-            secretKeyRef:
-              name: my-secret  # The name of the Kubernetes secret
-              key: api-key      # The specific key in the secret that holds the value
+      name: curie3
+      envFrom:
+        - secretRef:
+            name: fugaci-ssh-secret
   restartPolicy: OnFailure
   nodeSelector:
     kubernetes.io/os: darwin

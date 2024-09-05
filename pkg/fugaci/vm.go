@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"golang.org/x/crypto/ssh"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"log"
@@ -93,6 +94,12 @@ func (s *VM) GetContainerStatus() v1.ContainerStatus {
 	return s.pod.Status.ContainerStatuses[s.containerIndex]
 }
 
+func (s *VM) GetContainerSpec() v1.Container {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.pod.Spec.Containers[s.containerIndex]
+}
+
 func (s *VM) terminate(reason string, err error) {
 	log.Printf("vm terminated because '%s': %v", reason, err)
 	prevStatus := s.GetContainerStatus()
@@ -126,6 +133,18 @@ func (s *VM) updatePodIP(ip net.IP) {
 
 func (s *VM) containerSpec() v1.Container {
 	return s.pod.Spec.Containers[s.containerIndex]
+}
+
+func (s *VM) setRunCommand(cmd *exec.Cmd) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.runCmd = cmd
+}
+
+func (s *VM) getRunCommand() *exec.Cmd {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.runCmd
 }
 
 func (s *VM) Run() {
@@ -182,7 +201,7 @@ func (s *VM) Run() {
 			fmt.Errorf("failed to start container '%v' with: %v", containerID, err))
 		return
 	}
-	s.runCmd = runCmd
+	s.setRunCommand(runCmd)
 	startedAt := metav1.Now()
 	s.updateState(v1.ContainerState{Running: &v1.ContainerStateRunning{StartedAt: startedAt}})
 	log.Printf("started container '%v': %v", containerID, runCmd)
@@ -215,12 +234,13 @@ func (s *VM) Status() v1.ContainerStatus {
 func (s *VM) Cleanup() error {
 	stopCtx, cancelStopCtx := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelStopCtx()
-	err := s.virt.Stop(stopCtx, s.runCmd)
+	runCmd := s.getRunCommand()
+	err := s.virt.Stop(stopCtx, runCmd)
 	if err == nil {
 		log.Printf("stopped VM gracefully")
 	} else {
-		log.Printf("failed to stop VM gracefully '%v': %v\n", s.runCmd, err)
-		err = s.runCmd.Process.Kill()
+		log.Printf("failed to stop VM gracefully '%v': %v\n", runCmd, err)
+		err = runCmd.Process.Kill()
 		if err != nil && !errors.Is(err, os.ErrProcessDone) {
 			return err
 		}
@@ -268,6 +288,53 @@ func (s *VM) Matches(namespace, name string) bool {
 
 func (s *VM) GetPod() *v1.Pod {
 	s.mu.Lock()
-	s.mu.Unlock()
+	defer s.mu.Unlock()
 	return s.pod.DeepCopy()
+}
+
+// Env returns a map for each non-empty env variable
+func (s *VM) Env() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res := make(map[string]string)
+
+	containerSpec := s.pod.Spec.Containers[s.containerIndex]
+	// Iterate over the Env field in the container to find the matching env vars
+	for _, envVar := range containerSpec.Env {
+		if len(envVar.Value) > 0 {
+			res[envVar.Name] = envVar.Value
+		}
+	}
+	return res
+}
+
+func (s *VM) GetSSHConfig() (*ssh.ClientConfig, error) {
+	env := s.Env()
+	username, ok := env[FUGACI_SSH_USERNAME_ENVVAR]
+	if !ok {
+		return nil, fmt.Errorf("%v: %v env var not found", FUGACI_SSH_USERNAME_ENVVAR, s.PrettyName())
+	}
+	password, ok := env[FUGACI_SSH_PASSWORD_ENVVAR]
+	if !ok {
+		return nil, fmt.Errorf("%v: %v env var not found", FUGACI_SSH_PASSWORD_ENVVAR, s.PrettyName())
+	}
+
+	return &ssh.ClientConfig{
+		User: username,
+		Auth: []ssh.AuthMethod{
+			ssh.Password(password),
+		},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	}, nil
+}
+
+func (s *VM) IsReady() bool {
+	st := s.GetContainerStatus()
+	return st.Ready
+}
+
+func (s *VM) PrettyName() string {
+	pod := s.GetPod()
+	spec := s.GetContainerSpec()
+	return fmt.Sprintf("vm '%s' @ pod %s/%s", spec.Name, pod.Namespace, pod.Name)
 }

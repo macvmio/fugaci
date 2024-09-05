@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/ssh"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"net"
@@ -408,4 +409,96 @@ func TestVM_Cleanup_CalledWhilePulling_mustExitQuickly(t *testing.T) {
 	require.NotNil(t, status.State.Terminated)
 	assert.Equal(t, "unable to pull image", status.State.Terminated.Reason)
 	assert.Contains(t, status.State.Terminated.Message, "context cancelled")
+}
+
+// Tests for the Env() method
+func TestVM_Env(t *testing.T) {
+	pod := &v1.Pod{
+		Spec: v1.PodSpec{
+			Containers: []v1.Container{
+				{
+					Env: []v1.EnvVar{
+						{Name: FUGACI_SSH_USERNAME_ENVVAR, Value: "user1"},
+						{Name: FUGACI_SSH_PASSWORD_ENVVAR, Value: "pass1"},
+						{Name: "OTHER_ENV_VAR", Value: ""},
+					},
+				},
+			},
+		},
+	}
+
+	vm := &VM{
+		pod:            pod,
+		containerIndex: 0,
+	}
+
+	envVars := vm.Env()
+
+	assert.Equal(t, "user1", envVars[FUGACI_SSH_USERNAME_ENVVAR], "Expected FUGACI_SSH_USERNAME_ENVVAR to be 'user1'")
+	assert.Equal(t, "pass1", envVars[FUGACI_SSH_PASSWORD_ENVVAR], "Expected FUGACI_SSH_PASSWORD_ENVVAR to be 'pass1'")
+	assert.NotContains(t, envVars, "OTHER_ENV_VAR", "OTHER_ENV_VAR should not be present because its value is empty")
+}
+
+// Tests for the GetSSHConfig() method
+func TestVM_GetSSHConfig(t *testing.T) {
+	pod := &v1.Pod{
+		Spec: v1.PodSpec{
+			Containers: []v1.Container{
+				{
+					Env: []v1.EnvVar{
+						{Name: FUGACI_SSH_USERNAME_ENVVAR, Value: "user1"},
+						{Name: FUGACI_SSH_PASSWORD_ENVVAR, Value: "pass1"},
+					},
+				},
+			},
+		},
+	}
+
+	vm := &VM{
+		pod:            pod,
+		containerIndex: 0,
+	}
+
+	t.Run("valid ssh config", func(t *testing.T) {
+		sshConfig, err := vm.GetSSHConfig()
+		assert.NoError(t, err, "Expected no error from GetSSHConfig")
+		assert.Equal(t, "user1", sshConfig.User, "Expected SSH username to be 'user1'")
+		assert.Len(t, sshConfig.Auth, 1, "Expected one SSH auth method")
+		assert.Implements(t, (*ssh.AuthMethod)(nil), sshConfig.Auth[0], "Expected password-based auth method")
+	})
+
+	t.Run("missing SSH username", func(t *testing.T) {
+		// Test missing SSH username
+		vm.pod.Spec.Containers[0].Env = []v1.EnvVar{
+			{Name: FUGACI_SSH_PASSWORD_ENVVAR, Value: "pass1"},
+		}
+		_, err := vm.GetSSHConfig()
+		assert.Error(t, err, "Expected error when SSH username is missing")
+	})
+
+	t.Run("missing SSH password", func(t *testing.T) {
+		vm.pod.Spec.Containers[0].Env = []v1.EnvVar{
+			{Name: FUGACI_SSH_USERNAME_ENVVAR, Value: "user1"},
+		}
+		_, err := vm.GetSSHConfig()
+		assert.Error(t, err, "Expected error when SSH password is missing")
+	})
+}
+
+// Tests for the PrettyName() method
+func TestVM_PrettyName(t *testing.T) {
+	pod := &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pod",
+			Namespace: "default",
+		},
+		Spec: v1.PodSpec{Containers: []v1.Container{{Name: "test123"}}},
+	}
+	vm := &VM{
+		pod: pod,
+	}
+
+	prettyName := vm.PrettyName()
+	expectedName := "vm 'test123' @ pod default/test-pod"
+	assert.Equal(t, expectedName, prettyName, "Expected PrettyName to match")
 }

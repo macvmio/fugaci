@@ -27,6 +27,9 @@ var __ nodeutil.Provider = (*Provider)(nil)
 
 var ErrNotImplemented = errors.New("not implemented")
 
+const FUGACI_SSH_USERNAME_ENVVAR = "FUGACI_SSH_USERNAME"
+const FUGACI_SSH_PASSWORD_ENVVAR = "FUGACI_SSH_PASSWORD"
+
 type Provider struct {
 	resourceManager *manager.ResourceManager
 	cfg             Config
@@ -208,29 +211,24 @@ func (s *Provider) RunInContainer(ctx context.Context, namespace, podName, conta
 	if err != nil {
 		return fmt.Errorf("failed to find VM for pod %s/%s: %w", namespace, podName, err)
 	}
-	if len(vm.pod.Status.PodIP) == 0 {
-		return fmt.Errorf("pod %s/%s has no IP address", namespace, podName)
+	if !vm.IsReady() {
+		return fmt.Errorf("%v is not ready yet", vm.PrettyName())
 	}
-	// SSH client configuration
-	config := &ssh.ClientConfig{
-		User: "agent",
-		Auth: []ssh.AuthMethod{
-			ssh.Password("password"),
-		},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	config, err := vm.GetSSHConfig()
+	if err != nil {
+		return fmt.Errorf("failed to get SSH config for '%v': %w", vm.PrettyName(), err)
 	}
-
 	address := fmt.Sprintf("%s:22", vm.pod.Status.PodIP)
 	client, err := ssh.Dial("tcp", address, config)
 	if err != nil {
-		return fmt.Errorf("failed to dial SSH to '%s': %w", address, err)
+		return fmt.Errorf("%v: failed to dial SSH to '%s': %w", vm.PrettyName(), address, err)
 	}
 	defer client.Close()
 
 	// Create a session for running the command
 	session, err := client.NewSession()
 	if err != nil {
-		return fmt.Errorf("failed to create SSH session: %w", err)
+		return fmt.Errorf("%v: failed to create SSH session: %w", vm.PrettyName(), err)
 	}
 	defer session.Close()
 
@@ -257,7 +255,7 @@ func (s *Provider) RunInContainer(ctx context.Context, namespace, podName, conta
 		}
 
 		if err := session.RequestPty("xterm-256color", 80, 40, modes); err != nil {
-			return fmt.Errorf("request for pseudo terminal failed: %w", err)
+			return fmt.Errorf("%v: request for pseudo terminal failed: %w", vm.PrettyName(), err)
 		}
 		go handleResize(session, attach.Resize())
 	}
@@ -287,8 +285,6 @@ func (s *Provider) RunInContainer(ctx context.Context, namespace, podName, conta
 
 	// Wait for the command to finish
 	wg.Wait()
-
-	return nil
 
 	return nil
 }
