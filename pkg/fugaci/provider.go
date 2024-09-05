@@ -39,16 +39,9 @@ type Provider struct {
 	vms [2]*VM
 }
 
-type noOpPuller struct {
-}
-
-func (n noOpPuller) Pull(ctx context.Context, image string, pullPolicy v1.PullPolicy) error {
-	return nil
-}
-
 func NewProvider(cfg Config) (*LoggingProvider, error) {
 	return NewLoggingProvider(&Provider{
-		puller: &noOpPuller{},
+		puller: NewGeranosPuller(cfg.CurieImagesPath),
 		virt:   curie.NewVirtualization(cfg.CurieBinaryPath),
 		cfg:    cfg,
 		vms:    [2]*VM{},

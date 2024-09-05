@@ -20,9 +20,9 @@ type MockPuller struct {
 	mock.Mock
 }
 
-func (m *MockPuller) Pull(ctx context.Context, image string, pullPolicy v1.PullPolicy) error {
+func (m *MockPuller) Pull(ctx context.Context, image string, pullPolicy v1.PullPolicy, cb func(st v1.ContainerStateWaiting)) (imageID string, err error) {
 	args := m.Called(ctx, image, pullPolicy)
-	return args.Error(0)
+	return args.Get(0).(string), args.Error(1)
 }
 
 // MockVirtualization is a mock of the Virtualization interface.
@@ -66,7 +66,7 @@ func noPodOverride(pod *v1.Pod) {
 // setupCommonTestVM initializes the VM and sets up common mock behavior.
 func setupCommonTestVM(t *testing.T, podOverride func(*v1.Pod)) (*VM, *MockVirtualization, *MockPuller, func()) {
 	mockPuller := new(MockPuller)
-	mockPuller.On("Pull", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockPuller.On("Pull", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return("img1@sha256:123", nil)
 
 	mockVirt := new(MockVirtualization)
 	mockVirt.On("Create", mock.Anything, mock.Anything, mock.Anything).Return("containerid-123", nil)
@@ -101,8 +101,8 @@ func TestVM_Run_ErrorWhilePulling(t *testing.T) {
 	vm, _, mockPuller, cleanup := setupCommonTestVM(t, noPodOverride)
 	defer cleanup()
 
-	mockPuller.On("Pull", mock.Anything, mock.Anything, mock.Anything).Unset()
-	mockPuller.On("Pull", mock.Anything, mock.Anything, mock.Anything).Return(errors.New("invalid image"))
+	mockPuller.On("Pull", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Unset()
+	mockPuller.On("Pull", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return("", errors.New("invalid image"))
 
 	go vm.Run()
 
@@ -386,9 +386,9 @@ func TestVM_Cleanup_CalledWhilePulling_mustExitQuickly(t *testing.T) {
 	defer cleanup()
 
 	mockPuller.On("Create", mock.Anything, mock.Anything, mock.Anything).Unset()
-	mockPuller.On("Pull", mock.Anything, mock.Anything, mock.Anything).Unset()
+	mockPuller.On("Pull", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Unset()
 	// Simulate a Pull function that blocks, waiting on the context
-	mockPuller.On("Pull", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+	mockPuller.On("Pull", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 		// Extract the context from the arguments
 		ctx := args.Get(0).(context.Context)
 
@@ -396,7 +396,7 @@ func TestVM_Cleanup_CalledWhilePulling_mustExitQuickly(t *testing.T) {
 		fmt.Printf("simulating that pull is waiting on context cancellation\n")
 		<-ctx.Done()
 		fmt.Printf("simulating that pull is waiting on context cancellation: finished\n")
-	}).Return(errors.New("context cancelled"))
+	}).Return("", errors.New("context cancelled"))
 
 	go vm.Run()
 	time.Sleep(20 * time.Millisecond)

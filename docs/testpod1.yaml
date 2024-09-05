@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: testpod1
+spec:
+  containers:
+    - image: macvm.store/repo/base-runner:1.3
+      imagePullPolicy: Always
+      command: [ "test123" ]
+      name: nanoserver
+      readinessProbe:
+        exec:
+          command:
+            - sw_vers
+        initialDelaySeconds: 10
+        periodSeconds: 10
+  restartPolicy: OnFailure
+  nodeSelector:
+    kubernetes.io/os: darwin
+  tolerations:
+    - key: "fugaci.jarosik.online"
+      operator: "Equal"
+      value: "true"
+      effect: "NoSchedule"

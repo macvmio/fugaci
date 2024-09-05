@@ -5,6 +5,7 @@ type Config struct {
 	KubeConfigPath  string `yaml:"kubeConfigPath"`
 	LogLevel        string `yaml:"logLevel"`
 	CurieBinaryPath string `yaml:"curieBinaryPath"`
+	CurieImagesPath string `yaml:"curieImagesPath"`
 
 	TLS struct {
 		KeyPath  string `yaml:"keyPath"`

@@ -15,7 +15,7 @@ import (
 )
 
 type Puller interface {
-	Pull(ctx context.Context, image string, policy v1.PullPolicy) error
+	Pull(ctx context.Context, image string, pullPolicy v1.PullPolicy, cb func(st v1.ContainerStateWaiting)) (imageID string, err error)
 }
 
 type VirtualizationLifecycle interface {
@@ -120,6 +120,7 @@ func (s *VM) updatePodIP(ip net.IP) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pod.Status.PodIP = ip.String()
+	//s.pod.Status.Phase = v1.PodSucceeded
 }
 
 func (s *VM) containerSpec() v1.Container {
@@ -135,15 +136,19 @@ func (s *VM) Run() {
 
 	if len(s.GetContainerStatus().ContainerID) == 0 {
 		s.updateState(v1.ContainerState{Waiting: &v1.ContainerStateWaiting{Reason: "Pulling"}})
-		err := s.puller.Pull(s.lifetimeCtx, s.containerSpec().Image, s.containerSpec().ImagePullPolicy)
+		imageID, err := s.puller.Pull(s.lifetimeCtx, s.containerSpec().Image, s.containerSpec().ImagePullPolicy, func(st v1.ContainerStateWaiting) {
+			s.updateState(v1.ContainerState{
+				Waiting: &st,
+			})
+		})
 		if err != nil {
 			s.terminate("unable to pull image", err)
 			return
 		}
-		log.Printf("pulled image: %v", s.containerSpec().Image)
+		log.Printf("pulled image: %v (%v)", s.containerSpec().Image, imageID)
 		s.updateState(v1.ContainerState{Waiting: &v1.ContainerStateWaiting{Reason: "Pulled"}})
 
-		containerID, err := s.virt.Create(s.lifetimeCtx, *s.pod, 0)
+		containerID, err := s.virt.Create(s.lifetimeCtx, *s.pod.DeepCopy(), 0)
 		if err != nil {
 			s.terminate("failed to create container", err)
 			return
@@ -152,7 +157,7 @@ func (s *VM) Run() {
 		s.updateStatus(func(st *v1.ContainerStatus) {
 			st.ContainerID = containerID
 			st.Image = s.containerSpec().Image
-			st.ImageID = s.containerSpec().Image
+			st.ImageID = imageID
 		})
 		s.updateState(v1.ContainerState{Waiting: &v1.ContainerStateWaiting{Reason: "Created"}})
 	} else {
@@ -257,5 +262,5 @@ func (s *VM) Matches(namespace, name string) bool {
 }
 
 func (s *VM) GetPod() *v1.Pod {
-	return s.pod
+	return s.pod.DeepCopy()
 }
