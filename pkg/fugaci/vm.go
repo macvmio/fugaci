@@ -328,6 +328,71 @@ func (s *VM) getSSHConfig() (*ssh.ClientConfig, error) {
 	}, nil
 }
 
+func (s *VM) isEnvVarSensitive(name string) bool {
+	sensitiveNames := []string{
+		FUGACI_SSH_PASSWORD_ENVVAR,
+	}
+	for _, sensitiveName := range sensitiveNames {
+		if strings.ToUpper(name) == sensitiveName {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *VM) Exec(cmd []string, preConnection func(session *ssh.Session) error) error {
+	if !s.IsReady() {
+		return fmt.Errorf("%v is not ready yet", s.PrettyName())
+	}
+	config, err := s.getSSHConfig()
+	if err != nil {
+		return fmt.Errorf("failed to get SSH config for '%v': %w", s.PrettyName(), err)
+	}
+	pod := s.GetPod()
+	address := fmt.Sprintf("%s:22", pod.Status.PodIP)
+	client, err := ssh.Dial("tcp", address, config)
+	if err != nil {
+		return fmt.Errorf("%v: failed to connect to '%v': %w", s.PrettyName(), address, err)
+	}
+	defer client.Close()
+
+	// Create a session for running the command
+	session, err := client.NewSession()
+	if err != nil {
+		return fmt.Errorf("%v: failed to create SSH session: %w", s.PrettyName(), err)
+	}
+	defer session.Close()
+
+	// Quote each argument to handle spaces and special characters
+	for i, arg := range cmd {
+		cmd[i] = shellQuote(arg)
+	}
+
+	// Join the command and arguments into a single string
+	commandStr := strings.Join(cmd, " ")
+
+	if err := preConnection(session); err != nil {
+		return fmt.Errorf("%v: failed to apply pre conenction settings to '%v': %w", s.PrettyName(), commandStr, err)
+	}
+
+	env := s.env()
+
+	// TODO: Use basic: conn, err := net.DialTimeout("tcp", address, timeout) to determine if VM is Ready (not IP only) (for bootstrap)
+	// TODO: Add a file to /etc/ssh/sshd_config.d/* with "AcceptEnv KUBERNETES_* FUGACI_*"
+	// TODO: Set env vars optionally (not during initial VM bootstrap)
+	for name, value := range env {
+		if s.isEnvVarSensitive(name) {
+			continue
+		}
+		err = session.Setenv(name, value)
+		if err != nil {
+			log.Printf("%v: failed to set environment variable '%v': %v", s.PrettyName(), name, err)
+		}
+	}
+
+	return session.Run(commandStr)
+}
+
 func (s *VM) IsReady() bool {
 	st := s.GetContainerStatus()
 	return st.Ready

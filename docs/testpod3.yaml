@@ -8,6 +8,17 @@ spec:
       imagePullPolicy: Never
       command: [ "test123" ]
       name: curie3
+      env:
+        # Inject pod name into environment variable
+        - name: KUBERNETES_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        # Inject pod namespace into environment variable
+        - name: KUBERNETES_POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
       envFrom:
         - secretRef:
             name: fugaci-ssh-secret

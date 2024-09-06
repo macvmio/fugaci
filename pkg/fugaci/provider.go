@@ -209,56 +209,31 @@ func (s *Provider) RunInContainer(ctx context.Context, namespace, podName, conta
 	if err != nil {
 		return fmt.Errorf("failed to find VM for pod %s/%s: %w", namespace, podName, err)
 	}
-	if !vm.IsReady() {
-		return fmt.Errorf("%v is not ready yet", vm.PrettyName())
-	}
-	config, err := vm.GetSSHConfig()
-	if err != nil {
-		return fmt.Errorf("failed to get SSH config for '%v': %w", vm.PrettyName(), err)
-	}
-	address := fmt.Sprintf("%s:22", vm.pod.Status.PodIP)
-	client, err := ssh.Dial("tcp", address, config)
-	if err != nil {
-		return fmt.Errorf("%v: failed to dial SSH to '%s': %w", vm.PrettyName(), address, err)
-	}
-	defer client.Close()
 
-	// Create a session for running the command
-	session, err := client.NewSession()
-	if err != nil {
-		return fmt.Errorf("%v: failed to create SSH session: %w", vm.PrettyName(), err)
-	}
-	defer session.Close()
+	beforeConnect := func(session *ssh.Session) error {
+		// Set up the input/output streams
+		session.Stdin = attach.Stdin()
+		session.Stdout = attach.Stdout()
+		session.Stderr = attach.Stderr()
 
-	// Set up the input/output streams
-	session.Stdin = attach.Stdin()
-	session.Stdout = attach.Stdout()
-	session.Stderr = attach.Stderr()
+		// Handle TTY if needed
+		if attach.TTY() {
+			log.Printf("TTY attached to pod %s/%s", namespace, podName)
+			modes := ssh.TerminalModes{
+				ssh.ECHO:          1,     // enable echoing
+				ssh.TTY_OP_ISPEED: 14400, // input speed = 14.4kbaud
+				ssh.TTY_OP_OSPEED: 14400, // output speed = 14.4kbaud
+			}
 
-	// Handle TTY if needed
-	if attach.TTY() {
-		log.Printf("TTY attached to pod %s/%s", namespace, podName)
-		modes := ssh.TerminalModes{
-			ssh.ECHO:          1,     // enable echoing
-			ssh.TTY_OP_ISPEED: 14400, // input speed = 14.4kbaud
-			ssh.TTY_OP_OSPEED: 14400, // output speed = 14.4kbaud
+			if err := session.RequestPty("xterm-256color", 80, 40, modes); err != nil {
+				return fmt.Errorf("%v: request for pseudo terminal failed: %w", vm.PrettyName(), err)
+			}
+			go handleResize(session, attach.Resize())
 		}
-
-		if err := session.RequestPty("xterm-256color", 80, 40, modes); err != nil {
-			return fmt.Errorf("%v: request for pseudo terminal failed: %w", vm.PrettyName(), err)
-		}
-		go handleResize(session, attach.Resize())
+		return nil
 	}
 
-	// Quote each argument to handle spaces and special characters
-	for i, arg := range cmd {
-		cmd[i] = shellQuote(arg)
-	}
-
-	// Join the command and arguments into a single string
-	commandStr := strings.Join(cmd, " ")
-
-	return session.Run(commandStr)
+	return vm.Exec(cmd, beforeConnect)
 }
 
 // handleResize listens for resize events from the resize channel and adjusts the terminal size accordingly.
