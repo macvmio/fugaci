@@ -41,8 +41,8 @@ func (m *MockVirtualization) Start(ctx context.Context, containerID string) (*ex
 	return args.Get(0).(*exec.Cmd), args.Error(1)
 }
 
-func (m *MockVirtualization) Stop(ctx context.Context, containerRunCmd *exec.Cmd) error {
-	args := m.Called(ctx, containerRunCmd)
+func (m *MockVirtualization) Stop(ctx context.Context, containerPID int) error {
+	args := m.Called(ctx, containerPID)
 	return args.Error(0)
 }
 
@@ -411,7 +411,7 @@ func TestVM_Cleanup_CalledWhilePulling_mustExitQuickly(t *testing.T) {
 	assert.Contains(t, status.State.Terminated.Message, "context cancelled")
 }
 
-// Tests for the Env() method
+// Tests for the env() method
 func TestVM_Env(t *testing.T) {
 	pod := &v1.Pod{
 		Spec: v1.PodSpec{
@@ -432,14 +432,14 @@ func TestVM_Env(t *testing.T) {
 		containerIndex: 0,
 	}
 
-	envVars := vm.Env()
+	envVars := vm.env()
 
 	assert.Equal(t, "user1", envVars[FUGACI_SSH_USERNAME_ENVVAR], "Expected FUGACI_SSH_USERNAME_ENVVAR to be 'user1'")
 	assert.Equal(t, "pass1", envVars[FUGACI_SSH_PASSWORD_ENVVAR], "Expected FUGACI_SSH_PASSWORD_ENVVAR to be 'pass1'")
 	assert.NotContains(t, envVars, "OTHER_ENV_VAR", "OTHER_ENV_VAR should not be present because its value is empty")
 }
 
-// Tests for the GetSSHConfig() method
+// Tests for the getSSHConfig() method
 func TestVM_GetSSHConfig(t *testing.T) {
 	pod := &v1.Pod{
 		Spec: v1.PodSpec{
@@ -460,8 +460,8 @@ func TestVM_GetSSHConfig(t *testing.T) {
 	}
 
 	t.Run("valid ssh config", func(t *testing.T) {
-		sshConfig, err := vm.GetSSHConfig()
-		assert.NoError(t, err, "Expected no error from GetSSHConfig")
+		sshConfig, err := vm.getSSHConfig()
+		assert.NoError(t, err, "Expected no error from getSSHConfig")
 		assert.Equal(t, "user1", sshConfig.User, "Expected SSH username to be 'user1'")
 		assert.Len(t, sshConfig.Auth, 1, "Expected one SSH auth method")
 		assert.Implements(t, (*ssh.AuthMethod)(nil), sshConfig.Auth[0], "Expected password-based auth method")
@@ -472,7 +472,7 @@ func TestVM_GetSSHConfig(t *testing.T) {
 		vm.pod.Spec.Containers[0].Env = []v1.EnvVar{
 			{Name: FUGACI_SSH_PASSWORD_ENVVAR, Value: "pass1"},
 		}
-		_, err := vm.GetSSHConfig()
+		_, err := vm.getSSHConfig()
 		assert.Error(t, err, "Expected error when SSH username is missing")
 	})
 
@@ -480,7 +480,7 @@ func TestVM_GetSSHConfig(t *testing.T) {
 		vm.pod.Spec.Containers[0].Env = []v1.EnvVar{
 			{Name: FUGACI_SSH_USERNAME_ENVVAR, Value: "user1"},
 		}
-		_, err := vm.GetSSHConfig()
+		_, err := vm.getSSHConfig()
 		assert.Error(t, err, "Expected error when SSH password is missing")
 	})
 }

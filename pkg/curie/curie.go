@@ -55,16 +55,20 @@ func (s *Virtualization) Start(ctx context.Context, containerID string) (runComm
 	return cmd, cmd.Start()
 }
 
-func (s *Virtualization) Stop(ctx context.Context, containerRunCmd *exec.Cmd) error {
-	if containerRunCmd == nil {
+func (s *Virtualization) Stop(ctx context.Context, containerRunCmdPid int) error {
+	if containerRunCmdPid == 0 {
 		return nil
 	}
 
 	// Send the interrupt signal to the process
-	log.Printf("sending SIGTERM to process %d", containerRunCmd.Process.Pid)
-	err := containerRunCmd.Process.Signal(syscall.SIGTERM)
+	log.Printf("sending SIGTERM to process %d", containerRunCmdPid)
+	containerRunProcess, err := os.FindProcess(containerRunCmdPid)
+	if err != nil {
+		return fmt.Errorf("could not find process to stop: %w", err)
+	}
+	err = containerRunProcess.Signal(syscall.SIGTERM)
 	if errors.Is(err, os.ErrProcessDone) {
-		log.Printf("process %d terminated", containerRunCmd.Process.Pid)
+		log.Printf("process %d terminated", containerRunCmdPid)
 		return nil
 	}
 	if err != nil {
@@ -79,16 +83,13 @@ func (s *Virtualization) Stop(ctx context.Context, containerRunCmd *exec.Cmd) er
 			return fmt.Errorf("process still did not exit after %v", time.Since(start).Round(time.Second))
 		default:
 			// Check if the process is still running
-			p, err := os.FindProcess(containerRunCmd.Process.Pid)
+			p, err := os.FindProcess(containerRunCmdPid)
 			if err == nil {
 				// Probe the process to check if it's really alive
 				err := p.Signal(syscall.Signal(0))
 				_ = p.Release()
 				if errors.Is(err, os.ErrProcessDone) {
-					log.Printf("process %d exited after %v with code %d, waitStatus %d\n",
-						containerRunCmd.Process.Pid, time.Since(start),
-						containerRunCmd.ProcessState.ExitCode(),
-						containerRunCmd.ProcessState.Sys())
+					log.Printf("process %d exited after %v\n", containerRunCmdPid, time.Since(start))
 					return nil
 				}
 			}

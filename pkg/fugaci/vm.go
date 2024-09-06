@@ -11,7 +11,9 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -22,7 +24,7 @@ type Puller interface {
 type VirtualizationLifecycle interface {
 	Create(ctx context.Context, pod v1.Pod, containerIndex int) (containerID string, err error)
 	Start(ctx context.Context, containerID string) (runCommand *exec.Cmd, err error)
-	Stop(ctx context.Context, containerRunCmd *exec.Cmd) error
+	Stop(ctx context.Context, containerPID int) error
 	Destroy(ctx context.Context, containerID string) error
 }
 
@@ -44,10 +46,10 @@ type VM struct {
 
 	lifetimeCtx context.Context
 	cancelFunc  context.CancelCauseFunc
-	runCmd      *exec.Cmd
 
-	mu sync.Mutex
-	wg sync.WaitGroup
+	mu           sync.Mutex
+	wg           sync.WaitGroup
+	containerPID atomic.Int64
 }
 
 func NewVM(virt Virtualization, puller Puller, pod *v1.Pod, containerIndex int) (*VM, error) {
@@ -135,18 +137,6 @@ func (s *VM) containerSpec() v1.Container {
 	return s.pod.Spec.Containers[s.containerIndex]
 }
 
-func (s *VM) setRunCommand(cmd *exec.Cmd) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.runCmd = cmd
-}
-
-func (s *VM) getRunCommand() *exec.Cmd {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.runCmd
-}
-
 func (s *VM) Run() {
 	s.wg.Add(1)
 	defer s.wg.Done()
@@ -201,11 +191,15 @@ func (s *VM) Run() {
 			fmt.Errorf("failed to start container '%v' with: %v", containerID, err))
 		return
 	}
-	s.setRunCommand(runCmd)
 	startedAt := metav1.Now()
 	s.updateState(v1.ContainerState{Running: &v1.ContainerStateRunning{StartedAt: startedAt}})
 	log.Printf("started container '%v': %v", containerID, runCmd)
+
+	// TODO:
 	go s.observeIP(s.lifetimeCtx, containerID)
+
+	s.containerPID.Store(int64(runCmd.Process.Pid))
+
 	err = runCmd.Wait()
 	if err != nil {
 		log.Printf("ProcessState at exit: %v, code=%d", runCmd.ProcessState.String(), runCmd.ProcessState.ExitCode())
@@ -234,20 +228,25 @@ func (s *VM) Status() v1.ContainerStatus {
 func (s *VM) Cleanup() error {
 	stopCtx, cancelStopCtx := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelStopCtx()
-	runCmd := s.getRunCommand()
-	err := s.virt.Stop(stopCtx, runCmd)
+
+	err := s.virt.Stop(stopCtx, int(s.containerPID.Load()))
 	if err == nil {
-		log.Printf("stopped VM gracefully")
+		log.Printf("%v: stopped VM gracefully", s.PrettyName())
 	} else {
-		log.Printf("failed to stop VM gracefully '%v': %v\n", runCmd, err)
-		err = runCmd.Process.Kill()
+		log.Printf("%v: failed to stop VM gracefully: %v\n", s.PrettyName(), err)
+		p, err := os.FindProcess(int(s.containerPID.Load()))
+		if err != nil {
+			return fmt.Errorf("could not find process %d: %v", s.containerPID.Load(), err)
+		}
+		defer p.Release()
+		err = p.Kill()
 		if err != nil && !errors.Is(err, os.ErrProcessDone) {
 			return err
 		}
 	}
 
 	s.cancelFunc(errors.New("aborted by user"))
-	log.Printf("waiting for vm.Run() to complete its operations\n")
+	log.Printf("%v: waiting for vm.Run() to complete its operations\n", s.PrettyName())
 	s.wg.Wait()
 	st := s.Status()
 	if len(st.ContainerID) > 0 {
@@ -292,14 +291,14 @@ func (s *VM) GetPod() *v1.Pod {
 	return s.pod.DeepCopy()
 }
 
-// Env returns a map for each non-empty env variable
-func (s *VM) Env() map[string]string {
+// env returns a map for each non-empty env variable
+func (s *VM) env() map[string]string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	res := make(map[string]string)
 
 	containerSpec := s.pod.Spec.Containers[s.containerIndex]
-	// Iterate over the Env field in the container to find the matching env vars
+	// Iterate over the env field in the container to find the matching env vars
 	for _, envVar := range containerSpec.Env {
 		if len(envVar.Value) > 0 {
 			res[envVar.Name] = envVar.Value
@@ -308,8 +307,8 @@ func (s *VM) Env() map[string]string {
 	return res
 }
 
-func (s *VM) GetSSHConfig() (*ssh.ClientConfig, error) {
-	env := s.Env()
+func (s *VM) getSSHConfig() (*ssh.ClientConfig, error) {
+	env := s.env()
 	username, ok := env[FUGACI_SSH_USERNAME_ENVVAR]
 	if !ok {
 		return nil, fmt.Errorf("%v: %v env var not found", FUGACI_SSH_USERNAME_ENVVAR, s.PrettyName())
