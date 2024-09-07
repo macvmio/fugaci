@@ -65,8 +65,8 @@ type MockSSHRunner struct {
 	mock.Mock
 }
 
-func (m *MockSSHRunner) Run(address string, config *ssh.ClientConfig, cmd []string, preConnection ...func(session *ssh.Session) error) error {
-	args := m.Called(address, config, cmd, preConnection)
+func (m *MockSSHRunner) Run(ctx context.Context, address string, config *ssh.ClientConfig, cmd []string, preConnection ...func(session *ssh.Session) error) error {
+	args := m.Called(ctx, address, config, cmd, preConnection)
 	return args.Error(0)
 }
 
@@ -85,7 +85,7 @@ func setupCommonTestVM(t *testing.T, podOverride func(*v1.Pod)) (*VM, *MockVirtu
 	mockVirt.On("IP", mock.Anything, "containerid-123").Return(net.IPv4(1, 2, 3, 4), nil)
 
 	mockSSHRunner := new(MockSSHRunner)
-	mockSSHRunner.On("Run", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockSSHRunner.On("Run", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	pod := &v1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -94,7 +94,16 @@ func setupCommonTestVM(t *testing.T, podOverride func(*v1.Pod)) (*VM, *MockVirtu
 		},
 		Spec: v1.PodSpec{
 			Containers: []v1.Container{
-				{Name: "test-container", Image: "test-image", ImagePullPolicy: v1.PullIfNotPresent},
+				{
+					Name:            "test-container",
+					Image:           "test-image",
+					ImagePullPolicy: v1.PullIfNotPresent,
+					Env: []v1.EnvVar{
+						{Name: FUGACI_SSH_USERNAME_ENVVAR, Value: "testuser"},
+						{Name: FUGACI_SSH_PASSWORD_ENVVAR, Value: "testpassword"},
+					},
+					Command: []string{"sh", "-c", "test"},
+				},
 			},
 		},
 	}
@@ -279,6 +288,50 @@ func TestVM_Run_Successful_mustBeReadyWithIPAddress(t *testing.T) {
 		assert.True(t, *status.Started)
 		assert.Equal(t, "1.2.3.4", vm.GetPod().Status.PodIP)
 		assert.Equal(t, v1.PodRunning, vm.GetPod().Status.Phase)
+		break
+	}
+
+	<-vm.LifetimeContext().Done()
+
+	status := vm.Status()
+	require.NotNil(t, status.State.Terminated)
+
+	assert.Equal(t, "containerid-123", status.ContainerID)
+	assert.Equal(t, int32(0), status.State.Terminated.ExitCode)
+	assert.Equal(t, "exit status 0", status.State.Terminated.Message)
+	assert.Equal(t, "exited successfully", status.State.Terminated.Reason)
+	assert.NotEmpty(t, status.State.Terminated.StartedAt)
+	assert.NotEmpty(t, status.State.Terminated.FinishedAt)
+}
+
+func TestVM_Run_Successful_mustRunContainerCommandThroughSSH(t *testing.T) {
+	vm, mockVirt, _, mockSSHRunner, cleanup := setupCommonTestVM(t, noPodOverride)
+	defer cleanup()
+
+	mockVirt.On("Create", mock.Anything, mock.Anything, mock.Anything).Unset()
+	mockVirt.On("Start", mock.Anything, "containerid-123").Unset()
+
+	mockVirt.On("Create", mock.Anything, mock.Anything, mock.Anything).Return("containerid-123", nil)
+	cmd := exec.Command("/usr/bin/sleep", "0.3")
+	cmd.Start()
+	mockVirt.On("Start", mock.Anything, "containerid-123").Return(cmd, nil)
+
+	go vm.Run()
+
+	for {
+		status := vm.Status()
+		if !status.Ready {
+			time.Sleep(5 * time.Millisecond)
+			continue
+		}
+		assert.True(t, status.Ready)
+		assert.True(t, *status.Started)
+		assert.Equal(t, "1.2.3.4", vm.GetPod().Status.PodIP)
+		assert.Equal(t, v1.PodRunning, vm.GetPod().Status.Phase)
+		lastCall := mockSSHRunner.Calls[len(mockSSHRunner.Calls)-1]
+		assert.Equal(t, "Run", lastCall.Method)
+		assert.Equal(t, "1.2.3.4:22", lastCall.Arguments.Get(1))                 // SSH address
+		assert.Equal(t, []string{"sh", "-c", "test"}, lastCall.Arguments.Get(3)) // Command
 		break
 	}
 
@@ -520,20 +573,17 @@ func TestVM_RunCommand(t *testing.T) {
 
 	// Helper function to run the command and check errors
 	runAndCheckError := func(t *testing.T, podSetupFunc func(*v1.Pod), expectedError string) {
+		ctx := context.Background()
 		vm, _, _, _, _ := setupCommonTestVM(t, podSetupFunc)
-		err := vm.RunCommand([]string{"echo", "123"}, func(session *ssh.Session) error {
+		err := vm.RunCommand(ctx, []string{"echo", "123"}, func(session *ssh.Session) error {
 			return nil
 		})
 		assert.ErrorContains(t, err, expectedError)
 	}
 
-	t.Run("pod not ready", func(t *testing.T) {
-		runAndCheckError(t, noPodOverride, "vm 'test-container' @ pod testnamespace/test-pod is not ready yet")
-	})
-
 	t.Run("pod ready missing FUGACI_SSH_USERNAME", func(t *testing.T) {
 		runAndCheckError(t, func(pod *v1.Pod) {
-			pod.Status.ContainerStatuses = []v1.ContainerStatus{{Ready: true}}
+			pod.Spec.Containers[0].Env = make([]v1.EnvVar, 0)
 		}, "failed to get SSH config: env var not found: FUGACI_SSH_USERNAME")
 	})
 
@@ -542,11 +592,10 @@ func TestVM_RunCommand(t *testing.T) {
 			pod.Spec.Containers = []v1.Container{
 				{Name: "test123", Env: []v1.EnvVar{{Name: FUGACI_SSH_USERNAME_ENVVAR, Value: "test"}}},
 			}
-			pod.Status.ContainerStatuses = []v1.ContainerStatus{{Ready: true}}
 		}, "failed to get SSH config: env var not found: FUGACI_SSH_PASSWORD")
 	})
 
-	t.Run("pod ready but missing IP address", func(t *testing.T) {
+	t.Run("pod missing IP address", func(t *testing.T) {
 		runAndCheckError(t, func(pod *v1.Pod) {
 			pod.Spec.Containers = []v1.Container{
 				{Name: "test123", Env: []v1.EnvVar{
@@ -554,7 +603,6 @@ func TestVM_RunCommand(t *testing.T) {
 					{Name: FUGACI_SSH_PASSWORD_ENVVAR, Value: "p"},
 				}},
 			}
-			pod.Status.ContainerStatuses = []v1.ContainerStatus{{Ready: true}}
 		}, "no pod IP found")
 	})
 
@@ -570,8 +618,8 @@ func TestVM_RunCommand(t *testing.T) {
 			pod.Status.ContainerStatuses = []v1.ContainerStatus{{Ready: true}}
 		})
 		pre := func(session *ssh.Session) error { return nil }
-		err := vm.RunCommand([]string{"echo", "123"}, pre)
+		err := vm.RunCommand(context.Background(), []string{"echo", "123"}, pre)
 		assert.NoError(t, err)
-		mockSSHRunner.AssertCalled(t, "Run", "1.2.3.4:22", mock.Anything, []string{"echo", "123"}, mock.Anything)
+		mockSSHRunner.AssertCalled(t, "Run", mock.Anything, "1.2.3.4:22", mock.Anything, []string{"echo", "123"}, mock.Anything)
 	})
 }

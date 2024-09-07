@@ -25,7 +25,7 @@ type Puller interface {
 }
 
 type SSHRunner interface {
-	Run(address string, config *ssh.ClientConfig, cmd []string, preConnection ...func(session *ssh.Session) error) error
+	Run(ctx context.Context, address string, config *ssh.ClientConfig, cmd []string, preConnection ...func(session *ssh.Session) error) error
 }
 
 type VirtualizationLifecycle interface {
@@ -154,18 +154,33 @@ func (s *VM) waitAndRunCommandInside(ctx context.Context, container v1.Container
 	}
 	s.updatePodIP(ip)
 
-	/*noOp := func(session *ssh.Session) error { return nil }
-	err := s.RunCommand(container.Command, noOp)
-	if err != nil {
-		log.Printf("%v: vm failed to run command '%s': %v", s.PrettyName(), container.Command, err)
-		s.terminate("ssh failed", err)
-	}*/
+	retriesCount := 20
+	var err error
+	noOp := func(session *ssh.Session) error { return nil }
 
+	for i := 0; i < retriesCount; i++ {
+		err = s.RunCommand(ctx, []string{"echo", "hello"}, noOp)
+		if err == nil {
+			break
+		}
+		log.Printf("%v: SSH not ready yet: %v", s.PrettyName(), err)
+		time.Sleep(500 * time.Millisecond)
+	}
+	if err != nil {
+		log.Printf("%v: failed to establish SSH session", s.PrettyName())
+		return
+	}
 	s.updateStatus(func(st *v1.ContainerStatus) {
 		st.Ready = true
 		v := true
 		st.Started = &v
 	})
+	log.Printf("%v: successfully established SSH session", s.PrettyName())
+	err = s.RunCommand(ctx, container.Command, noOp)
+	if err != nil {
+		log.Printf("%v: command finished with error: %v", s.PrettyName(), err)
+	}
+	log.Printf("%v: waitAndRunCommandInside has finished", s.PrettyName())
 }
 
 func (s *VM) Run() {
@@ -352,7 +367,7 @@ func (s *VM) getSSHConfig() (*ssh.ClientConfig, error) {
 			ssh.Password(password),
 		},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-		Timeout:         10 * time.Second,
+		Timeout:         2 * time.Second,
 	}, nil
 }
 
@@ -376,10 +391,7 @@ func (s *VM) isEnvVarSensitive(name string) bool {
 // AcceptEnv KUBERNETES_* FUGACI_*
 // ClientAliveInterval 10
 // ClientAliveCountMax 5
-func (s *VM) RunCommand(cmd []string, preConnection func(session *ssh.Session) error) error {
-	if !s.IsReady() {
-		return fmt.Errorf("%v is not ready yet", s.PrettyName())
-	}
+func (s *VM) RunCommand(ctx context.Context, cmd []string, preConnection func(session *ssh.Session) error) error {
 	config, err := s.getSSHConfig()
 	if err != nil {
 		return fmt.Errorf("failed to get SSH config: %w", err)
@@ -396,7 +408,7 @@ func (s *VM) RunCommand(cmd []string, preConnection func(session *ssh.Session) e
 		},
 		preConnection,
 	}
-	return s.sshRunner.Run(address, config, cmd, preConnectionFuncs...)
+	return s.sshRunner.Run(ctx, address, config, cmd, preConnectionFuncs...)
 }
 
 func (s *VM) IsReady() bool {

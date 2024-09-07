@@ -1,6 +1,7 @@
 package sshrunner
 
 import (
+	"context"
 	"fmt"
 	"github.com/virtual-kubelet/virtual-kubelet/node/api"
 	"golang.org/x/crypto/ssh"
@@ -59,7 +60,7 @@ func SetEnvVars(session *ssh.Session, env map[string]string, isSensitive func(na
 	return nil
 }
 
-func (s *Runner) Run(address string, config *ssh.ClientConfig, cmd []string, preConnection ...func(session *ssh.Session) error) error {
+func (s *Runner) Run(ctx context.Context, address string, config *ssh.ClientConfig, cmd []string, preConnection ...func(session *ssh.Session) error) error {
 	client, err := ssh.Dial("tcp", address, config)
 	if err != nil {
 		return fmt.Errorf("failed to connect to '%v': %w", address, err)

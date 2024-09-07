@@ -201,7 +201,7 @@ func (s *Provider) RunInContainer(ctx context.Context, namespace, podName, conta
 		return fmt.Errorf("failed to find VM for pod %s/%s: %w", namespace, podName, err)
 	}
 
-	return vm.RunCommand(cmd, func(session *ssh.Session) error {
+	return vm.RunCommand(ctx, cmd, func(session *ssh.Session) error {
 		return sshrunner.AttachStreams(session, attach)
 	})
 }
