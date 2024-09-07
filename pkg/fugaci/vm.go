@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/tomekjarosik/fugaci/pkg/sshrunner"
 	"golang.org/x/crypto/ssh"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -17,8 +18,14 @@ import (
 	"time"
 )
 
+const VmSshPort = 22
+
 type Puller interface {
 	Pull(ctx context.Context, image string, pullPolicy v1.PullPolicy, cb func(st v1.ContainerStateWaiting)) (imageID string, err error)
+}
+
+type SSHRunner interface {
+	Run(address string, config *ssh.ClientConfig, cmd []string, preConnection ...func(session *ssh.Session) error) error
 }
 
 type VirtualizationLifecycle interface {
@@ -41,6 +48,7 @@ type Virtualization interface {
 type VM struct {
 	virt           Virtualization
 	puller         Puller
+	sshRunner      SSHRunner
 	pod            *v1.Pod
 	containerIndex int
 
@@ -52,7 +60,7 @@ type VM struct {
 	containerPID atomic.Int64
 }
 
-func NewVM(virt Virtualization, puller Puller, pod *v1.Pod, containerIndex int) (*VM, error) {
+func NewVM(virt Virtualization, puller Puller, sshRunner SSHRunner, pod *v1.Pod, containerIndex int) (*VM, error) {
 	if containerIndex < 0 || containerIndex >= len(pod.Spec.Containers) {
 		return nil, errors.New("invalid container index")
 	}
@@ -69,8 +77,9 @@ func NewVM(virt Virtualization, puller Puller, pod *v1.Pod, containerIndex int) 
 	cst.State = v1.ContainerState{Waiting: &v1.ContainerStateWaiting{Reason: "Creating", Message: "Just initialized"}}
 
 	return &VM{
-		virt:   virt,
-		puller: puller,
+		virt:      virt,
+		puller:    puller,
+		sshRunner: sshRunner,
 
 		pod:            pod,
 		containerIndex: containerIndex,
@@ -103,6 +112,7 @@ func (s *VM) GetContainerSpec() v1.Container {
 }
 
 func (s *VM) terminate(reason string, err error) {
+	// Must be safe to run from multiple goroutines
 	log.Printf("vm terminated because '%s': %v", reason, err)
 	prevStatus := s.GetContainerStatus()
 	st := v1.ContainerState{Terminated: &v1.ContainerStateTerminated{
@@ -135,6 +145,27 @@ func (s *VM) updatePodIP(ip net.IP) {
 
 func (s *VM) containerSpec() v1.Container {
 	return s.pod.Spec.Containers[s.containerIndex]
+}
+
+func (s *VM) waitAndRunCommandInside(ctx context.Context, container v1.Container, containerID string) {
+	ip := s.waitForIP(ctx, containerID)
+	if ip == nil {
+		return
+	}
+	s.updatePodIP(ip)
+
+	/*noOp := func(session *ssh.Session) error { return nil }
+	err := s.RunCommand(container.Command, noOp)
+	if err != nil {
+		log.Printf("%v: vm failed to run command '%s': %v", s.PrettyName(), container.Command, err)
+		s.terminate("ssh failed", err)
+	}*/
+
+	s.updateStatus(func(st *v1.ContainerStatus) {
+		st.Ready = true
+		v := true
+		st.Started = &v
+	})
 }
 
 func (s *VM) Run() {
@@ -194,11 +225,13 @@ func (s *VM) Run() {
 	startedAt := metav1.Now()
 	s.updateState(v1.ContainerState{Running: &v1.ContainerStateRunning{StartedAt: startedAt}})
 	log.Printf("started container '%v': %v", containerID, runCmd)
-
-	// TODO:
-	go s.observeIP(s.lifetimeCtx, containerID)
-
 	s.containerPID.Store(int64(runCmd.Process.Pid))
+
+	s.wg.Add(1)
+	go func(c v1.Container, cID string) {
+		defer s.wg.Done()
+		s.waitAndRunCommandInside(s.lifetimeCtx, c, cID)
+	}(s.GetContainerSpec(), containerID)
 
 	err = runCmd.Wait()
 	if err != nil {
@@ -256,7 +289,7 @@ func (s *VM) Cleanup() error {
 	return nil
 }
 
-func (s *VM) observeIP(ctx context.Context, containerID string) {
+func (s *VM) waitForIP(ctx context.Context, containerID string) net.IP {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -264,19 +297,14 @@ func (s *VM) observeIP(ctx context.Context, containerID string) {
 		select {
 		case <-ctx.Done():
 			// Exit if the context is canceled or the deadline is exceeded
-			return
+			return nil
 		case <-ticker.C:
 			// Run the IP check synchronously within the select block
 			ip, err := s.virt.IP(ctx, containerID)
 			if err != nil {
 				continue
 			}
-			s.updatePodIP(ip)
-			s.updateStatus(func(st *v1.ContainerStatus) {
-				st.Ready = true
-				v := true
-				st.Started = &v
-			})
+			return ip
 		}
 	}
 }
@@ -311,11 +339,11 @@ func (s *VM) getSSHConfig() (*ssh.ClientConfig, error) {
 	env := s.env()
 	username, ok := env[FUGACI_SSH_USERNAME_ENVVAR]
 	if !ok {
-		return nil, fmt.Errorf("%v: %v env var not found", FUGACI_SSH_USERNAME_ENVVAR, s.PrettyName())
+		return nil, fmt.Errorf("env var not found: %v", FUGACI_SSH_USERNAME_ENVVAR)
 	}
 	password, ok := env[FUGACI_SSH_PASSWORD_ENVVAR]
 	if !ok {
-		return nil, fmt.Errorf("%v: %v env var not found", FUGACI_SSH_PASSWORD_ENVVAR, s.PrettyName())
+		return nil, fmt.Errorf("env var not found: %v", FUGACI_SSH_PASSWORD_ENVVAR)
 	}
 
 	return &ssh.ClientConfig{
@@ -340,57 +368,35 @@ func (s *VM) isEnvVarSensitive(name string) bool {
 	return false
 }
 
-func (s *VM) Exec(cmd []string, preConnection func(session *ssh.Session) error) error {
+// TODO: Use basic: conn, err := net.DialTimeout("tcp", address, timeout) to determine if VM is Ready (not IP only) (for bootstrap)
+// TODO: Add a file to /etc/ssh/sshd_config.d/* with "AcceptEnv KUBERNETES_* FUGACI_*"
+//
+// TODO: Set env vars optionally (not during initial VM bootstrap)
+
+// AcceptEnv KUBERNETES_* FUGACI_*
+// ClientAliveInterval 10
+// ClientAliveCountMax 5
+func (s *VM) RunCommand(cmd []string, preConnection func(session *ssh.Session) error) error {
 	if !s.IsReady() {
 		return fmt.Errorf("%v is not ready yet", s.PrettyName())
 	}
 	config, err := s.getSSHConfig()
 	if err != nil {
-		return fmt.Errorf("failed to get SSH config for '%v': %w", s.PrettyName(), err)
+		return fmt.Errorf("failed to get SSH config: %w", err)
 	}
 	pod := s.GetPod()
-	address := fmt.Sprintf("%s:22", pod.Status.PodIP)
-	client, err := ssh.Dial("tcp", address, config)
-	if err != nil {
-		return fmt.Errorf("%v: failed to connect to '%v': %w", s.PrettyName(), address, err)
+	if len(pod.Status.PodIP) == 0 {
+		return fmt.Errorf("no pod IP found")
 	}
-	defer client.Close()
+	address := fmt.Sprintf("%s:%d", pod.Status.PodIP, VmSshPort)
 
-	// Create a session for running the command
-	session, err := client.NewSession()
-	if err != nil {
-		return fmt.Errorf("%v: failed to create SSH session: %w", s.PrettyName(), err)
+	preConnectionFuncs := []func(session *ssh.Session) error{
+		func(session *ssh.Session) error {
+			return sshrunner.SetEnvVars(session, s.env(), s.isEnvVarSensitive)
+		},
+		preConnection,
 	}
-	defer session.Close()
-
-	// Quote each argument to handle spaces and special characters
-	for i, arg := range cmd {
-		cmd[i] = shellQuote(arg)
-	}
-
-	// Join the command and arguments into a single string
-	commandStr := strings.Join(cmd, " ")
-
-	if err := preConnection(session); err != nil {
-		return fmt.Errorf("%v: failed to apply pre conenction settings to '%v': %w", s.PrettyName(), commandStr, err)
-	}
-
-	env := s.env()
-
-	// TODO: Use basic: conn, err := net.DialTimeout("tcp", address, timeout) to determine if VM is Ready (not IP only) (for bootstrap)
-	// TODO: Add a file to /etc/ssh/sshd_config.d/* with "AcceptEnv KUBERNETES_* FUGACI_*"
-	// TODO: Set env vars optionally (not during initial VM bootstrap)
-	for name, value := range env {
-		if s.isEnvVarSensitive(name) {
-			continue
-		}
-		err = session.Setenv(name, value)
-		if err != nil {
-			log.Printf("%v: failed to set environment variable '%v': %v", s.PrettyName(), name, err)
-		}
-	}
-
-	return session.Run(commandStr)
+	return s.sshRunner.Run(address, config, cmd, preConnectionFuncs...)
 }
 
 func (s *VM) IsReady() bool {

@@ -61,11 +61,20 @@ func (m *MockVirtualization) Exists(ctx context.Context, containerID string) (bo
 	return args.Bool(0), args.Error(1)
 }
 
+type MockSSHRunner struct {
+	mock.Mock
+}
+
+func (m *MockSSHRunner) Run(address string, config *ssh.ClientConfig, cmd []string, preConnection ...func(session *ssh.Session) error) error {
+	args := m.Called(address, config, cmd, preConnection)
+	return args.Error(0)
+}
+
 func noPodOverride(pod *v1.Pod) {
 }
 
 // setupCommonTestVM initializes the VM and sets up common mock behavior.
-func setupCommonTestVM(t *testing.T, podOverride func(*v1.Pod)) (*VM, *MockVirtualization, *MockPuller, func()) {
+func setupCommonTestVM(t *testing.T, podOverride func(*v1.Pod)) (*VM, *MockVirtualization, *MockPuller, *MockSSHRunner, func()) {
 	mockPuller := new(MockPuller)
 	mockPuller.On("Pull", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return("img1@sha256:123", nil)
 
@@ -75,9 +84,13 @@ func setupCommonTestVM(t *testing.T, podOverride func(*v1.Pod)) (*VM, *MockVirtu
 	mockVirt.On("Destroy", mock.Anything, "containerid-123").Return(nil)
 	mockVirt.On("IP", mock.Anything, "containerid-123").Return(net.IPv4(1, 2, 3, 4), nil)
 
+	mockSSHRunner := new(MockSSHRunner)
+	mockSSHRunner.On("Run", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
 	pod := &v1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "test-pod",
+			Namespace: "testnamespace",
+			Name:      "test-pod",
 		},
 		Spec: v1.PodSpec{
 			Containers: []v1.Container{
@@ -87,7 +100,7 @@ func setupCommonTestVM(t *testing.T, podOverride func(*v1.Pod)) (*VM, *MockVirtu
 	}
 	podOverride(pod)
 
-	vm, err := NewVM(mockVirt, mockPuller, pod, 0)
+	vm, err := NewVM(mockVirt, mockPuller, mockSSHRunner, pod, 0)
 	require.NoError(t, err)
 	require.NotNil(t, vm)
 
@@ -95,11 +108,11 @@ func setupCommonTestVM(t *testing.T, podOverride func(*v1.Pod)) (*VM, *MockVirtu
 		// TODO:
 	}
 
-	return vm, mockVirt, mockPuller, cleanup
+	return vm, mockVirt, mockPuller, mockSSHRunner, cleanup
 }
 
 func TestVM_Run_ErrorWhilePulling(t *testing.T) {
-	vm, _, mockPuller, cleanup := setupCommonTestVM(t, noPodOverride)
+	vm, _, mockPuller, _, cleanup := setupCommonTestVM(t, noPodOverride)
 	defer cleanup()
 
 	mockPuller.On("Pull", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Unset()
@@ -116,7 +129,7 @@ func TestVM_Run_ErrorWhilePulling(t *testing.T) {
 }
 
 func TestVM_Run_CreateContainerFailed_InvalidBinary(t *testing.T) {
-	vm, mockVirt, _, cleanup := setupCommonTestVM(t, noPodOverride)
+	vm, mockVirt, _, _, cleanup := setupCommonTestVM(t, noPodOverride)
 	defer cleanup()
 
 	mockVirt.On("Create", mock.Anything, mock.Anything, mock.Anything).Unset()
@@ -133,7 +146,7 @@ func TestVM_Run_CreateContainerFailed_InvalidBinary(t *testing.T) {
 }
 
 func TestVM_Run_CreateContainerFailed_MissingBinary(t *testing.T) {
-	vm, mockVirt, _, cleanup := setupCommonTestVM(t, noPodOverride)
+	vm, mockVirt, _, _, cleanup := setupCommonTestVM(t, noPodOverride)
 	defer cleanup()
 
 	mockVirt.On("Create", mock.Anything, mock.Anything, mock.Anything).Unset()
@@ -150,7 +163,7 @@ func TestVM_Run_CreateContainerFailed_MissingBinary(t *testing.T) {
 }
 
 func TestVM_Run_CreateContainerFailed_Crash(t *testing.T) {
-	vm, mockVirt, _, cleanup := setupCommonTestVM(t, noPodOverride)
+	vm, mockVirt, _, _, cleanup := setupCommonTestVM(t, noPodOverride)
 	defer cleanup()
 
 	mockVirt.On("Create", mock.Anything, mock.Anything, mock.Anything).Unset()
@@ -167,7 +180,7 @@ func TestVM_Run_CreateContainerFailed_Crash(t *testing.T) {
 }
 
 func TestVM_Run_StartContainerFailed_Crash(t *testing.T) {
-	vm, mockVirt, _, cleanup := setupCommonTestVM(t, noPodOverride)
+	vm, mockVirt, _, _, cleanup := setupCommonTestVM(t, noPodOverride)
 	defer cleanup()
 
 	mockVirt.On("Start", mock.Anything, "containerid-123").Unset()
@@ -187,7 +200,7 @@ func TestVM_Run_StartContainerFailed_Crash(t *testing.T) {
 }
 
 func TestVM_Run_Successful(t *testing.T) {
-	vm, mockVirt, _, cleanup := setupCommonTestVM(t, noPodOverride)
+	vm, mockVirt, _, _, cleanup := setupCommonTestVM(t, noPodOverride)
 	defer cleanup()
 
 	mockVirt.On("Create", mock.Anything, mock.Anything, mock.Anything).Unset()
@@ -214,7 +227,7 @@ func TestVM_Run_Successful(t *testing.T) {
 }
 
 func TestVM_Run_Successful_ifContainerIDProvided_mustRestart(t *testing.T) {
-	vm, mockVirt, _, cleanup := setupCommonTestVM(t, func(pod *v1.Pod) {
+	vm, mockVirt, _, _, cleanup := setupCommonTestVM(t, func(pod *v1.Pod) {
 		pod.Status.ContainerStatuses = []v1.ContainerStatus{{
 			ContainerID: "containerid-123",
 		}}
@@ -243,7 +256,7 @@ func TestVM_Run_Successful_ifContainerIDProvided_mustRestart(t *testing.T) {
 }
 
 func TestVM_Run_Successful_mustBeReadyWithIPAddress(t *testing.T) {
-	vm, mockVirt, _, cleanup := setupCommonTestVM(t, noPodOverride)
+	vm, mockVirt, _, _, cleanup := setupCommonTestVM(t, noPodOverride)
 	defer cleanup()
 
 	mockVirt.On("Create", mock.Anything, mock.Anything, mock.Anything).Unset()
@@ -283,7 +296,7 @@ func TestVM_Run_Successful_mustBeReadyWithIPAddress(t *testing.T) {
 }
 
 func TestVM_Run_ProcessIsHanging(t *testing.T) {
-	vm, mockVirt, _, cleanup := setupCommonTestVM(t, noPodOverride)
+	vm, mockVirt, _, _, cleanup := setupCommonTestVM(t, noPodOverride)
 	defer cleanup()
 
 	mockVirt.On("IP", mock.Anything).Unset()
@@ -329,7 +342,7 @@ func TestVM_Run_ProcessIsHanging(t *testing.T) {
 }
 
 func TestVM_Run_Success_CleanupMustBeGraceful(t *testing.T) {
-	vm, mockVirt, _, cleanup := setupCommonTestVM(t, noPodOverride)
+	vm, mockVirt, _, _, cleanup := setupCommonTestVM(t, noPodOverride)
 	defer cleanup()
 
 	mockVirt.On("Start", mock.Anything, "containerid-123").Unset()
@@ -356,7 +369,7 @@ func TestVM_Run_Success_CleanupMustBeGraceful(t *testing.T) {
 }
 
 func TestVM_Run_Successful_CleanupMustBeIdempotent(t *testing.T) {
-	vm, mockVirt, _, cleanup := setupCommonTestVM(t, noPodOverride)
+	vm, mockVirt, _, _, cleanup := setupCommonTestVM(t, noPodOverride)
 	defer cleanup()
 
 	cmd := exec.Command("/usr/bin/sleep", "0.1")
@@ -383,7 +396,7 @@ func TestVM_Run_Successful_CleanupMustBeIdempotent(t *testing.T) {
 }
 
 func TestVM_Cleanup_CalledWhilePulling_mustExitQuickly(t *testing.T) {
-	vm, _, mockPuller, cleanup := setupCommonTestVM(t, noPodOverride)
+	vm, _, mockPuller, _, cleanup := setupCommonTestVM(t, noPodOverride)
 	defer cleanup()
 
 	mockPuller.On("Create", mock.Anything, mock.Anything, mock.Anything).Unset()
@@ -501,4 +514,64 @@ func TestVM_PrettyName(t *testing.T) {
 	prettyName := vm.PrettyName()
 	expectedName := "vm 'test123' @ pod default/test-pod"
 	assert.Equal(t, expectedName, prettyName, "Expected PrettyName to match")
+}
+
+func TestVM_RunCommand(t *testing.T) {
+
+	// Helper function to run the command and check errors
+	runAndCheckError := func(t *testing.T, podSetupFunc func(*v1.Pod), expectedError string) {
+		vm, _, _, _, _ := setupCommonTestVM(t, podSetupFunc)
+		err := vm.RunCommand([]string{"echo", "123"}, func(session *ssh.Session) error {
+			return nil
+		})
+		assert.ErrorContains(t, err, expectedError)
+	}
+
+	t.Run("pod not ready", func(t *testing.T) {
+		runAndCheckError(t, noPodOverride, "vm 'test-container' @ pod testnamespace/test-pod is not ready yet")
+	})
+
+	t.Run("pod ready missing FUGACI_SSH_USERNAME", func(t *testing.T) {
+		runAndCheckError(t, func(pod *v1.Pod) {
+			pod.Status.ContainerStatuses = []v1.ContainerStatus{{Ready: true}}
+		}, "failed to get SSH config: env var not found: FUGACI_SSH_USERNAME")
+	})
+
+	t.Run("pod ready missing FUGACI_SSH_PASSWORD", func(t *testing.T) {
+		runAndCheckError(t, func(pod *v1.Pod) {
+			pod.Spec.Containers = []v1.Container{
+				{Name: "test123", Env: []v1.EnvVar{{Name: FUGACI_SSH_USERNAME_ENVVAR, Value: "test"}}},
+			}
+			pod.Status.ContainerStatuses = []v1.ContainerStatus{{Ready: true}}
+		}, "failed to get SSH config: env var not found: FUGACI_SSH_PASSWORD")
+	})
+
+	t.Run("pod ready but missing IP address", func(t *testing.T) {
+		runAndCheckError(t, func(pod *v1.Pod) {
+			pod.Spec.Containers = []v1.Container{
+				{Name: "test123", Env: []v1.EnvVar{
+					{Name: FUGACI_SSH_USERNAME_ENVVAR, Value: "u"},
+					{Name: FUGACI_SSH_PASSWORD_ENVVAR, Value: "p"},
+				}},
+			}
+			pod.Status.ContainerStatuses = []v1.ContainerStatus{{Ready: true}}
+		}, "no pod IP found")
+	})
+
+	t.Run("pod ready with SSH session running", func(t *testing.T) {
+		vm, _, _, mockSSHRunner, _ := setupCommonTestVM(t, func(pod *v1.Pod) {
+			pod.Spec.Containers = []v1.Container{
+				{Name: "test123", Env: []v1.EnvVar{
+					{Name: FUGACI_SSH_USERNAME_ENVVAR, Value: "u"},
+					{Name: FUGACI_SSH_PASSWORD_ENVVAR, Value: "p"},
+				}},
+			}
+			pod.Status.PodIP = "1.2.3.4"
+			pod.Status.ContainerStatuses = []v1.ContainerStatus{{Ready: true}}
+		})
+		pre := func(session *ssh.Session) error { return nil }
+		err := vm.RunCommand([]string{"echo", "123"}, pre)
+		assert.NoError(t, err)
+		mockSSHRunner.AssertCalled(t, "Run", "1.2.3.4:22", mock.Anything, []string{"echo", "123"}, mock.Anything)
+	})
 }

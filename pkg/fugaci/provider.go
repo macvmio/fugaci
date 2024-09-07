@@ -6,6 +6,7 @@ import (
 	"fmt"
 	io_prometheus_client "github.com/prometheus/client_model/go"
 	"github.com/tomekjarosik/fugaci/pkg/curie"
+	"github.com/tomekjarosik/fugaci/pkg/sshrunner"
 	"github.com/virtual-kubelet/node-cli/manager"
 	"github.com/virtual-kubelet/virtual-kubelet/errdefs"
 	vknode "github.com/virtual-kubelet/virtual-kubelet/node"
@@ -16,7 +17,6 @@ import (
 	"io"
 	v1 "k8s.io/api/core/v1"
 	"log"
-	"strings"
 	"sync"
 )
 
@@ -60,7 +60,7 @@ func (s *Provider) allocateVM(pod *v1.Pod) (*VM, error) {
 		if s.vms[i] != nil {
 			continue
 		}
-		vm, err := NewVM(s.virt, s.puller, pod, 0)
+		vm, err := NewVM(s.virt, s.puller, sshrunner.NewRunner(), pod, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -195,55 +195,15 @@ func (s *Provider) GetContainerLogs(ctx context.Context, namespace, podName, con
 	panic("implement me")
 }
 
-// shellQuote properly quotes a string for use in a shell command
-func shellQuote(s string) string {
-	// Use single quotes if the string contains spaces or special characters
-	if strings.ContainsAny(s, " '\"\\$`") {
-		return fmt.Sprintf("'%s'", strings.ReplaceAll(s, "'", "'\"'\"'"))
-	}
-	return s
-}
-
 func (s *Provider) RunInContainer(ctx context.Context, namespace, podName, containerName string, cmd []string, attach api.AttachIO) error {
 	vm, err := s.findVMByNames(namespace, podName, containerName)
 	if err != nil {
 		return fmt.Errorf("failed to find VM for pod %s/%s: %w", namespace, podName, err)
 	}
 
-	beforeConnect := func(session *ssh.Session) error {
-		// Set up the input/output streams
-		session.Stdin = attach.Stdin()
-		session.Stdout = attach.Stdout()
-		session.Stderr = attach.Stderr()
-
-		// Handle TTY if needed
-		if attach.TTY() {
-			log.Printf("TTY attached to pod %s/%s", namespace, podName)
-			modes := ssh.TerminalModes{
-				ssh.ECHO:          1,     // enable echoing
-				ssh.TTY_OP_ISPEED: 14400, // input speed = 14.4kbaud
-				ssh.TTY_OP_OSPEED: 14400, // output speed = 14.4kbaud
-			}
-
-			if err := session.RequestPty("xterm-256color", 80, 40, modes); err != nil {
-				return fmt.Errorf("%v: request for pseudo terminal failed: %w", vm.PrettyName(), err)
-			}
-			go handleResize(session, attach.Resize())
-		}
-		return nil
-	}
-
-	return vm.Exec(cmd, beforeConnect)
-}
-
-// handleResize listens for resize events from the resize channel and adjusts the terminal size accordingly.
-func handleResize(session *ssh.Session, resize <-chan api.TermSize) {
-	for termSize := range resize {
-		// Send the window change request to the SSH session with the new terminal size
-		if err := session.WindowChange(int(termSize.Height), int(termSize.Width)); err != nil {
-			log.Printf("failed to change window size: %v\n", err)
-		}
-	}
+	return vm.RunCommand(cmd, func(session *ssh.Session) error {
+		return sshrunner.AttachStreams(session, attach)
+	})
 }
 
 func (s *Provider) AttachToContainer(ctx context.Context, namespace, podName, containerName string, attach api.AttachIO) error {
