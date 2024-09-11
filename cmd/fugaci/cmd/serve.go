@@ -50,7 +50,7 @@ func NewCmdServe() *cobra.Command {
 			}
 
 			providerFunc := func(pConfig nodeutil.ProviderConfig) (nodeutil.Provider, node.NodeProvider, error) {
-				p, err := fugaci.NewProvider(cfg)
+				p, err := fugaci.NewProvider(cmd.Context(), cfg)
 				if err != nil {
 					return nil, nil, err
 				}

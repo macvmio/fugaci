@@ -13,10 +13,10 @@ import (
 	"github.com/virtual-kubelet/virtual-kubelet/node/api"
 	"github.com/virtual-kubelet/virtual-kubelet/node/api/statsv1alpha1"
 	"github.com/virtual-kubelet/virtual-kubelet/node/nodeutil"
-	"golang.org/x/crypto/ssh"
 	"io"
 	v1 "k8s.io/api/core/v1"
 	"log"
+	"strings"
 	"sync"
 )
 
@@ -25,10 +25,8 @@ var __ nodeutil.Provider = (*Provider)(nil)
 
 var ErrNotImplemented = errors.New("not implemented")
 
-const FUGACI_SSH_USERNAME_ENVVAR = "FUGACI_SSH_USERNAME"
-const FUGACI_SSH_PASSWORD_ENVVAR = "FUGACI_SSH_PASSWORD"
-
 type Provider struct {
+	appContext      context.Context
 	resourceManager *manager.ResourceManager
 	cfg             Config
 	virt            *curie.Virtualization
@@ -40,12 +38,13 @@ type Provider struct {
 	vms [2]*VM
 }
 
-func NewProvider(cfg Config) (*LoggingProvider, error) {
+func NewProvider(appCtx context.Context, cfg Config) (*LoggingProvider, error) {
 	return NewLoggingProvider(&Provider{
-		puller: NewGeranosPuller(cfg.CurieImagesPath),
-		virt:   curie.NewVirtualization(cfg.CurieBinaryPath),
-		cfg:    cfg,
-		vms:    [2]*VM{},
+		appContext: appCtx,
+		puller:     NewGeranosPuller(cfg.CurieImagesPath),
+		virt:       curie.NewVirtualization(cfg.CurieBinaryPath),
+		cfg:        cfg,
+		vms:        [2]*VM{},
 	}), nil
 }
 
@@ -60,7 +59,7 @@ func (s *Provider) allocateVM(pod *v1.Pod) (*VM, error) {
 		if s.vms[i] != nil {
 			continue
 		}
-		vm, err := NewVM(s.virt, s.puller, sshrunner.NewRunner(), pod, 0)
+		vm, err := NewVM(s.appContext, s.virt, s.puller, sshrunner.NewRunner(), pod, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -151,18 +150,25 @@ func (s *Provider) DeletePod(ctx context.Context, pod *v1.Pod) error {
 
 	vm, err := s.findVM(pod)
 	if err != nil {
-		return fmt.Errorf("VM for pod (%s,%s) not found: %w", pod.Namespace, pod.Name, err)
+		if pod.Status.ContainerStatuses != nil && len(pod.Status.ContainerStatuses[0].ContainerID) > 0 {
+			err2 := s.virt.Destroy(ctx, pod.Status.ContainerStatuses[0].ContainerID)
+			if err2 != nil {
+				log.Printf("error destroying container %s for Pod %s/%s: %v", pod.Status.ContainerStatuses[0].ContainerID, pod.Namespace, pod.Name, err2)
+			} else {
+				log.Printf("deleted forgotten container %s for Pod %s/%s", pod.Status.ContainerStatuses[0].ContainerID, pod.Namespace, pod.Name)
+			}
+		}
+		return errdefs.NotFoundf("VM for pod '%s/%s' not found: %w", pod.Namespace, pod.Name, err)
 	}
 
 	err = vm.Cleanup()
 	if err != nil {
-		return fmt.Errorf("cleanup of VM for pod (%s,%s) failed: %w", pod.Namespace, pod.Name, err)
+		return fmt.Errorf("cleanup of VM for pod '%s/%s' failed: %w", pod.Namespace, pod.Name, err)
 	}
 
 	return s.deallocateVM(vm)
 }
 
-// GetPodStatus returns a dummy Pod status
 func (s *Provider) GetPodStatus(ctx context.Context, namespace, name string) (*v1.PodStatus, error) {
 	log.Printf("[%s] GetPodStatus for %s/%s", s.cfg.NodeName, namespace, name)
 	pod, err := s.GetPod(ctx, namespace, name)
@@ -191,19 +197,19 @@ func (s *Provider) ConfigureNode(ctx context.Context, node *v1.Node) {
 //}
 
 func (s *Provider) GetContainerLogs(ctx context.Context, namespace, podName, containerName string, opts api.ContainerLogOpts) (io.ReadCloser, error) {
-	//TODO implement me
-	panic("implement me")
+	// Return a simple static log line
+	l := "TODO: Log entry from container " + containerName + " in pod " + namespace + "/" + podName + "\n"
+	return io.NopCloser(strings.NewReader(l)), nil
 }
 
 func (s *Provider) RunInContainer(ctx context.Context, namespace, podName, containerName string, cmd []string, attach api.AttachIO) error {
+	log.Printf("RunInContainer")
 	vm, err := s.findVMByNames(namespace, podName, containerName)
 	if err != nil {
 		return fmt.Errorf("failed to find VM for pod %s/%s: %w", namespace, podName, err)
 	}
 
-	return vm.RunCommand(ctx, cmd, func(session *ssh.Session) error {
-		return sshrunner.AttachStreams(session, attach)
-	})
+	return vm.RunCommand(ctx, cmd, sshrunner.WithAttachIO(attach), sshrunner.WithEnv(vm.GetEnvVars()))
 }
 
 func (s *Provider) AttachToContainer(ctx context.Context, namespace, podName, containerName string, attach api.AttachIO) error {

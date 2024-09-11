@@ -5,11 +5,20 @@ import (
 	"fmt"
 	"github.com/virtual-kubelet/virtual-kubelet/node/api"
 	"golang.org/x/crypto/ssh"
+	v1 "k8s.io/api/core/v1"
 	"log"
 	"strings"
 )
 
 type Runner struct {
+}
+
+type AttachIO api.AttachIO
+
+type DialInfo struct {
+	Address  string
+	Username string
+	Password string
 }
 
 func NewRunner() *Runner {
@@ -24,9 +33,13 @@ func handleSSHWindowResize(session *ssh.Session, resize <-chan api.TermSize) {
 			log.Printf("failed to change window size: %v\n", err)
 		}
 	}
+	log.Printf("window resize terminated")
 }
 
-func AttachStreams(session *ssh.Session, attach api.AttachIO) error {
+func attachStreams(session *ssh.Session, attach AttachIO) error {
+	if attach == nil {
+		return nil
+	}
 	// Set up the input/output streams
 	session.Stdin = attach.Stdin()
 	session.Stdout = attach.Stdout()
@@ -47,23 +60,25 @@ func AttachStreams(session *ssh.Session, attach api.AttachIO) error {
 	return nil
 }
 
-func SetEnvVars(session *ssh.Session, env map[string]string, isSensitive func(name string) bool) error {
-	for name, value := range env {
-		if isSensitive(name) {
+func setEnvVars(session *ssh.Session, env []v1.EnvVar, isSensitive func(name string) bool) error {
+	for _, nameVal := range env {
+		if isSensitive(nameVal.Name) {
 			continue
 		}
-		err := session.Setenv(name, value)
+		err := session.Setenv(nameVal.Name, nameVal.Value)
 		if err != nil {
-			return fmt.Errorf("failed to set environment variable '%v': %v", name, err)
+			return fmt.Errorf("failed to set environment variable '%v': %v", nameVal.Name, err)
 		}
 	}
 	return nil
 }
 
-func (s *Runner) Run(ctx context.Context, address string, config *ssh.ClientConfig, cmd []string, preConnection ...func(session *ssh.Session) error) error {
-	client, err := ssh.Dial("tcp", address, config)
+func (s *Runner) Run(ctx context.Context, dialInfo DialInfo, cmd []string, opts ...Option) error {
+	o := makeOptions(dialInfo, opts...)
+
+	client, err := ssh.Dial("tcp", dialInfo.Address, o.config)
 	if err != nil {
-		return fmt.Errorf("failed to connect to '%v': %w", address, err)
+		return fmt.Errorf("failed to connect to '%v': %w", dialInfo.Address, err)
 	}
 	defer client.Close()
 
@@ -81,14 +96,42 @@ func (s *Runner) Run(ctx context.Context, address string, config *ssh.ClientConf
 
 	// Join the command and arguments into a single string
 	commandStr := strings.Join(cmd, " ")
-
-	for _, pr := range preConnection {
-		if err := pr(session); err != nil {
-			return fmt.Errorf("failed to apply pre conenction settings to '%v': %w", commandStr, err)
-		}
-	}
 	defer func() {
-		log.Printf("SSH session for command: '%v' has finished", commandStr)
+		log.Printf("%v: SSH session for command: '%v' has finished", o.prefix, commandStr)
 	}()
-	return session.Run(commandStr)
+
+	err = setEnvVars(session, o.env, o.isSensitiveEnvVar)
+	if err != nil {
+		return fmt.Errorf("failed to apply environment settings to '%v': %w", commandStr, err)
+	}
+
+	if err := attachStreams(session, o.attachIO); err != nil {
+		return fmt.Errorf("failed to attach streams: %w", err)
+	}
+
+	log.Printf("%v: starting command: '%v'", o.prefix, commandStr)
+	err = session.Start(commandStr)
+	if err != nil {
+		return fmt.Errorf("%v: failed to start SSH session '%v': %w", o.prefix, commandStr, err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		defer log.Printf("goroutine finished waiting for SSH command to finish")
+		select {
+		case <-ctx.Done():
+			log.Printf("%v: context is done for command '%v'", o.prefix, commandStr)
+			err := client.Close()
+			if err != nil {
+				log.Printf("%v: failed to send close network client for '%v': %v", o.prefix, commandStr, err)
+			}
+		case <-done:
+			log.Printf("%v: SSH session for command '%v' finished", o.prefix, commandStr)
+		}
+	}()
+
+	err = session.Wait()
+	done <- err
+	log.Printf("SSHRunner has completed '%s' with err=%v", commandStr, err)
+	return err
 }

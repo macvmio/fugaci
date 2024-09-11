@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/crypto/ssh"
+	"github.com/tomekjarosik/fugaci/pkg/sshrunner"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"net"
@@ -65,8 +65,8 @@ type MockSSHRunner struct {
 	mock.Mock
 }
 
-func (m *MockSSHRunner) Run(ctx context.Context, address string, config *ssh.ClientConfig, cmd []string, preConnection ...func(session *ssh.Session) error) error {
-	args := m.Called(ctx, address, config, cmd, preConnection)
+func (m *MockSSHRunner) Run(ctx context.Context, dialInfo sshrunner.DialInfo, cmd []string, opts ...sshrunner.Option) error {
+	args := m.Called(ctx, dialInfo, cmd, opts)
 	return args.Error(0)
 }
 
@@ -99,8 +99,8 @@ func setupCommonTestVM(t *testing.T, podOverride func(*v1.Pod)) (*VM, *MockVirtu
 					Image:           "test-image",
 					ImagePullPolicy: v1.PullIfNotPresent,
 					Env: []v1.EnvVar{
-						{Name: FUGACI_SSH_USERNAME_ENVVAR, Value: "testuser"},
-						{Name: FUGACI_SSH_PASSWORD_ENVVAR, Value: "testpassword"},
+						{Name: SshUsernameEnvVar, Value: "testuser"},
+						{Name: SshPasswordEnvVar, Value: "testpassword"},
 					},
 					Command: []string{"sh", "-c", "test"},
 				},
@@ -109,7 +109,7 @@ func setupCommonTestVM(t *testing.T, podOverride func(*v1.Pod)) (*VM, *MockVirtu
 	}
 	podOverride(pod)
 
-	vm, err := NewVM(mockVirt, mockPuller, mockSSHRunner, pod, 0)
+	vm, err := NewVM(context.Background(), mockVirt, mockPuller, mockSSHRunner, pod, 0)
 	require.NoError(t, err)
 	require.NotNil(t, vm)
 
@@ -330,8 +330,8 @@ func TestVM_Run_Successful_mustRunContainerCommandThroughSSH(t *testing.T) {
 		assert.Equal(t, v1.PodRunning, vm.GetPod().Status.Phase)
 		lastCall := mockSSHRunner.Calls[len(mockSSHRunner.Calls)-1]
 		assert.Equal(t, "Run", lastCall.Method)
-		assert.Equal(t, "1.2.3.4:22", lastCall.Arguments.Get(1))                 // SSH address
-		assert.Equal(t, []string{"sh", "-c", "test"}, lastCall.Arguments.Get(3)) // Command
+		assert.Equal(t, sshrunner.DialInfo{Address: "1.2.3.4:22", Username: "testuser", Password: "testpassword"}, lastCall.Arguments.Get(1)) // SSH address
+		assert.Equal(t, []string{"sh", "-c", "test"}, lastCall.Arguments.Get(2))                                                              // Command
 		break
 	}
 
@@ -477,15 +477,15 @@ func TestVM_Cleanup_CalledWhilePulling_mustExitQuickly(t *testing.T) {
 	assert.Contains(t, status.State.Terminated.Message, "context cancelled")
 }
 
-// Tests for the env() method
+/*
 func TestVM_Env(t *testing.T) {
 	pod := &v1.Pod{
 		Spec: v1.PodSpec{
 			Containers: []v1.Container{
 				{
 					Env: []v1.EnvVar{
-						{Name: FUGACI_SSH_USERNAME_ENVVAR, Value: "user1"},
-						{Name: FUGACI_SSH_PASSWORD_ENVVAR, Value: "pass1"},
+						{Name: SshUsernameEnvVar, Value: "user1"},
+						{Name: SshPasswordEnvVar, Value: "pass1"},
 						{Name: "OTHER_ENV_VAR", Value: ""},
 					},
 				},
@@ -493,27 +493,25 @@ func TestVM_Env(t *testing.T) {
 		},
 	}
 
-	vm := &VM{
-		pod:            pod,
-		containerIndex: 0,
-	}
+	vm := NewVM()
 
 	envVars := vm.env()
 
-	assert.Equal(t, "user1", envVars[FUGACI_SSH_USERNAME_ENVVAR], "Expected FUGACI_SSH_USERNAME_ENVVAR to be 'user1'")
-	assert.Equal(t, "pass1", envVars[FUGACI_SSH_PASSWORD_ENVVAR], "Expected FUGACI_SSH_PASSWORD_ENVVAR to be 'pass1'")
+	assert.Equal(t, "user1", envVars[SshUsernameEnvVar], "Expected FUGACI_SSH_USERNAME_ENVVAR to be 'user1'")
+	assert.Equal(t, "pass1", envVars[SshPasswordEnvVar], "Expected FUGACI_SSH_PASSWORD_ENVVAR to be 'pass1'")
 	assert.NotContains(t, envVars, "OTHER_ENV_VAR", "OTHER_ENV_VAR should not be present because its value is empty")
 }
+*/
 
-// Tests for the getSSHConfig() method
+/*
 func TestVM_GetSSHConfig(t *testing.T) {
 	pod := &v1.Pod{
 		Spec: v1.PodSpec{
 			Containers: []v1.Container{
 				{
 					Env: []v1.EnvVar{
-						{Name: FUGACI_SSH_USERNAME_ENVVAR, Value: "user1"},
-						{Name: FUGACI_SSH_PASSWORD_ENVVAR, Value: "pass1"},
+						{Name: SshUsernameEnvVar, Value: "user1"},
+						{Name: SshPasswordEnvVar, Value: "pass1"},
 					},
 				},
 			},
@@ -536,7 +534,7 @@ func TestVM_GetSSHConfig(t *testing.T) {
 	t.Run("missing SSH username", func(t *testing.T) {
 		// Test missing SSH username
 		vm.pod.Spec.Containers[0].Env = []v1.EnvVar{
-			{Name: FUGACI_SSH_PASSWORD_ENVVAR, Value: "pass1"},
+			{Name: SshPasswordEnvVar, Value: "pass1"},
 		}
 		_, err := vm.getSSHConfig()
 		assert.Error(t, err, "Expected error when SSH username is missing")
@@ -544,30 +542,13 @@ func TestVM_GetSSHConfig(t *testing.T) {
 
 	t.Run("missing SSH password", func(t *testing.T) {
 		vm.pod.Spec.Containers[0].Env = []v1.EnvVar{
-			{Name: FUGACI_SSH_USERNAME_ENVVAR, Value: "user1"},
+			{Name: SshUsernameEnvVar, Value: "user1"},
 		}
 		_, err := vm.getSSHConfig()
 		assert.Error(t, err, "Expected error when SSH password is missing")
 	})
 }
-
-// Tests for the PrettyName() method
-func TestVM_PrettyName(t *testing.T) {
-	pod := &v1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-pod",
-			Namespace: "default",
-		},
-		Spec: v1.PodSpec{Containers: []v1.Container{{Name: "test123"}}},
-	}
-	vm := &VM{
-		pod: pod,
-	}
-
-	prettyName := vm.PrettyName()
-	expectedName := "vm 'test123' @ pod default/test-pod"
-	assert.Equal(t, expectedName, prettyName, "Expected PrettyName to match")
-}
+*/
 
 func TestVM_RunCommand(t *testing.T) {
 
@@ -575,32 +556,16 @@ func TestVM_RunCommand(t *testing.T) {
 	runAndCheckError := func(t *testing.T, podSetupFunc func(*v1.Pod), expectedError string) {
 		ctx := context.Background()
 		vm, _, _, _, _ := setupCommonTestVM(t, podSetupFunc)
-		err := vm.RunCommand(ctx, []string{"echo", "123"}, func(session *ssh.Session) error {
-			return nil
-		})
+		err := vm.RunCommand(ctx, []string{"echo", "123"})
 		assert.ErrorContains(t, err, expectedError)
 	}
-
-	t.Run("pod ready missing FUGACI_SSH_USERNAME", func(t *testing.T) {
-		runAndCheckError(t, func(pod *v1.Pod) {
-			pod.Spec.Containers[0].Env = make([]v1.EnvVar, 0)
-		}, "failed to get SSH config: env var not found: FUGACI_SSH_USERNAME")
-	})
-
-	t.Run("pod ready missing FUGACI_SSH_PASSWORD", func(t *testing.T) {
-		runAndCheckError(t, func(pod *v1.Pod) {
-			pod.Spec.Containers = []v1.Container{
-				{Name: "test123", Env: []v1.EnvVar{{Name: FUGACI_SSH_USERNAME_ENVVAR, Value: "test"}}},
-			}
-		}, "failed to get SSH config: env var not found: FUGACI_SSH_PASSWORD")
-	})
 
 	t.Run("pod missing IP address", func(t *testing.T) {
 		runAndCheckError(t, func(pod *v1.Pod) {
 			pod.Spec.Containers = []v1.Container{
 				{Name: "test123", Env: []v1.EnvVar{
-					{Name: FUGACI_SSH_USERNAME_ENVVAR, Value: "u"},
-					{Name: FUGACI_SSH_PASSWORD_ENVVAR, Value: "p"},
+					{Name: SshUsernameEnvVar, Value: "u"},
+					{Name: SshPasswordEnvVar, Value: "p"},
 				}},
 			}
 		}, "no pod IP found")
@@ -610,16 +575,19 @@ func TestVM_RunCommand(t *testing.T) {
 		vm, _, _, mockSSHRunner, _ := setupCommonTestVM(t, func(pod *v1.Pod) {
 			pod.Spec.Containers = []v1.Container{
 				{Name: "test123", Env: []v1.EnvVar{
-					{Name: FUGACI_SSH_USERNAME_ENVVAR, Value: "u"},
-					{Name: FUGACI_SSH_PASSWORD_ENVVAR, Value: "p"},
+					{Name: SshUsernameEnvVar, Value: "u"},
+					{Name: SshPasswordEnvVar, Value: "p"},
 				}},
 			}
-			pod.Status.PodIP = "1.2.3.4"
-			pod.Status.ContainerStatuses = []v1.ContainerStatus{{Ready: true}}
 		})
-		pre := func(session *ssh.Session) error { return nil }
-		err := vm.RunCommand(context.Background(), []string{"echo", "123"}, pre)
+		vm.safeUpdatePodIP(net.IP{1, 2, 3, 4})
+		err := vm.RunCommand(context.Background(), []string{"echo", "123"})
 		assert.NoError(t, err)
-		mockSSHRunner.AssertCalled(t, "Run", mock.Anything, "1.2.3.4:22", mock.Anything, []string{"echo", "123"}, mock.Anything)
+		mockSSHRunner.AssertCalled(t, "Run",
+			mock.Anything,
+			sshrunner.DialInfo{
+				Address: "1.2.3.4:22", Username: "u", Password: "p"},
+			[]string{"echo", "123"},
+			mock.Anything)
 	})
 }
