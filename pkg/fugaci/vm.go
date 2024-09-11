@@ -176,7 +176,7 @@ func (s *VM) safeUpdatePodIP(ip net.IP) {
 }
 
 func (s *VM) waitAndRunCommandInside(ctx context.Context, container v1.Container, containerID string) {
-	ip := s.waitForIP(ctx, containerID)
+	ip := s.WaitForIP(ctx, containerID)
 	if ip == nil {
 		return
 	}
@@ -340,7 +340,7 @@ func (s *VM) Cleanup() error {
 	return nil
 }
 
-func (s *VM) waitForIP(ctx context.Context, containerID string) net.IP {
+func (s *VM) WaitForIP(ctx context.Context, containerID string) net.IP {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
