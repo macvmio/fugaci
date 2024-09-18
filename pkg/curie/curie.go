@@ -50,7 +50,7 @@ func (s *Virtualization) Create(ctx context.Context, pod v1.Pod, containerIndex 
 }
 
 func (s *Virtualization) Start(ctx context.Context, containerID string) (runCommand *exec.Cmd, err error) {
-	args := []string{"start", containerID}
+	args := []string{"start", "--no-window", containerID}
 	cmd := exec.CommandContext(ctx, s.curieBinaryPath, args...)
 	// TODO: Use command cancel here!!
 	//cmd.Cancel = func() error {
