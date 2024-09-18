@@ -7,7 +7,9 @@ import (
 	"golang.org/x/crypto/ssh"
 	v1 "k8s.io/api/core/v1"
 	"log"
+	"net"
 	"strings"
+	"time"
 )
 
 type Runner struct {
@@ -73,14 +75,56 @@ func setEnvVars(session *ssh.Session, env []v1.EnvVar, isSensitive func(name str
 	return nil
 }
 
+// DialWithDeadline works around the case when net.DialWithTimeout
+// succeeds, but key exchange hangs. Setting deadline on connection
+// prevents this case from happening
+func DialWithDeadline(network string, addr string, config *ssh.ClientConfig) (*ssh.Client, error) {
+	conn, err := net.DialTimeout(network, addr, config.Timeout)
+	if err != nil {
+		return nil, err
+	}
+	if config.Timeout > 0 {
+		conn.SetReadDeadline(time.Now().Add(config.Timeout))
+	}
+	c, chans, reqs, err := ssh.NewClientConn(conn, addr, config)
+	if err != nil {
+		return nil, err
+	}
+	if config.Timeout > 0 {
+		conn.SetReadDeadline(time.Time{})
+	}
+	return ssh.NewClient(c, chans, reqs), nil
+}
+
 func (s *Runner) Run(ctx context.Context, dialInfo DialInfo, cmd []string, opts ...Option) error {
 	o := makeOptions(dialInfo, opts...)
 
-	client, err := ssh.Dial("tcp", dialInfo.Address, o.config)
+	// it can be stuck here
+	client, err := DialWithDeadline("tcp", dialInfo.Address, o.config)
 	if err != nil {
 		return fmt.Errorf("failed to connect to '%v': %w", dialInfo.Address, err)
 	}
 	defer client.Close()
+
+	// Quote each argument to handle spaces and special characters
+	for i, arg := range cmd {
+		cmd[i] = shellQuote(arg)
+	}
+
+	commandStr := strings.Join(cmd, " ")
+
+	done := make(chan error, 1)
+	go func() {
+		select {
+		case <-ctx.Done():
+			err := client.Close()
+			if err != nil {
+				log.Printf("%v: failed to send close network client for '%v': %v", o.prefix, commandStr, err)
+			}
+		case <-done:
+			log.Printf("%v: SSH session for command '%v' finished", o.prefix, commandStr)
+		}
+	}()
 
 	// Create a session for running the command
 	session, err := client.NewSession()
@@ -88,17 +132,6 @@ func (s *Runner) Run(ctx context.Context, dialInfo DialInfo, cmd []string, opts 
 		return fmt.Errorf("failed to create SSH session: %w", err)
 	}
 	defer session.Close()
-
-	// Quote each argument to handle spaces and special characters
-	for i, arg := range cmd {
-		cmd[i] = shellQuote(arg)
-	}
-
-	// Join the command and arguments into a single string
-	commandStr := strings.Join(cmd, " ")
-	defer func() {
-		log.Printf("%v: SSH session for command: '%v' has finished", o.prefix, commandStr)
-	}()
 
 	err = setEnvVars(session, o.env, o.isSensitiveEnvVar)
 	if err != nil {
@@ -109,29 +142,12 @@ func (s *Runner) Run(ctx context.Context, dialInfo DialInfo, cmd []string, opts 
 		return fmt.Errorf("failed to attach streams: %w", err)
 	}
 
-	log.Printf("%v: starting command: '%v'", o.prefix, commandStr)
 	err = session.Start(commandStr)
 	if err != nil {
 		return fmt.Errorf("%v: failed to start SSH session '%v': %w", o.prefix, commandStr, err)
 	}
 
-	done := make(chan error, 1)
-	go func() {
-		defer log.Printf("goroutine finished waiting for SSH command to finish")
-		select {
-		case <-ctx.Done():
-			log.Printf("%v: context is done for command '%v'", o.prefix, commandStr)
-			err := client.Close()
-			if err != nil {
-				log.Printf("%v: failed to send close network client for '%v': %v", o.prefix, commandStr, err)
-			}
-		case <-done:
-			log.Printf("%v: SSH session for command '%v' finished", o.prefix, commandStr)
-		}
-	}()
-
 	err = session.Wait()
 	done <- err
-	log.Printf("SSHRunner has completed '%s' with err=%v", commandStr, err)
 	return err
 }

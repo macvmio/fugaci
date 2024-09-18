@@ -6,6 +6,8 @@ package fugaci
 import (
 	"context"
 	"github.com/stretchr/testify/assert"
+	"github.com/tomekjarosik/fugaci/pkg/curie"
+	"github.com/tomekjarosik/fugaci/pkg/sshrunner"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"log"
@@ -14,14 +16,8 @@ import (
 )
 
 func TestVMIntegration_StartAndCleanup(t *testing.T) {
-	// Set up the context and cancel function for VM lifetime
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-
-	// Assume you have real implementations of the interfaces
-	var virt Virtualization
-	var puller Puller
-	var sshRunner SSHRunner
 
 	// Define a basic pod spec with a container for the VM
 	pod := &v1.Pod{
@@ -33,7 +29,7 @@ func TestVMIntegration_StartAndCleanup(t *testing.T) {
 			Containers: []v1.Container{
 				{
 					Name:  "test-container",
-					Image: "your-image:latest", // Replace with your actual image
+					Image: "macvm.store/repo/base-runner:1.6",
 					Env: []v1.EnvVar{
 						{
 							Name:  SshUsernameEnvVar,
@@ -44,12 +40,17 @@ func TestVMIntegration_StartAndCleanup(t *testing.T) {
 							Value: "password",
 						},
 					},
+					ImagePullPolicy: v1.PullNever,
+					Command:         []string{"echo", "test123"},
 				},
 			},
 		},
 	}
 
 	// Create a new VM instance
+	virt := curie.NewVirtualization("/Users/tomek/src/curie-main/.build/arm64-apple-macosx/debug/curie")
+	puller := NewGeranosPuller("notimportant")
+	sshRunner := sshrunner.NewRunner()
 	vm, err := NewVM(ctx, virt, puller, sshRunner, pod, 0)
 	if err != nil {
 		t.Fatalf("Failed to create VM: %v", err)
@@ -58,13 +59,14 @@ func TestVMIntegration_StartAndCleanup(t *testing.T) {
 	// Start the VM in a separate goroutine
 	go vm.Run()
 
-	// Wait for the VM to assign an IP address (this will block until it gets an IP or context timeout)
-	ip := vm.WaitForIP(ctx, vm.GetContainerStatus().ContainerID)
-	if ip == nil {
-		t.Fatalf("Failed to assign IP to the VM")
+	for {
+		if vm.GetContainerStatus().Ready {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 
-	log.Printf("VM assigned IP: %s", ip.String())
+	log.Printf("VM assigned IP: %s", vm.GetPod().Status.PodIP)
 
 	// Check the VM status to ensure it's running
 	assert.True(t, vm.IsReady(), "VM should be marked as ready after IP assignment")
