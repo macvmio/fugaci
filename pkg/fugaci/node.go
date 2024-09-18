@@ -93,7 +93,7 @@ func (s *Node) Architecture() string {
 }
 
 func (s *Node) GetKernelVersion() string {
-	output, err := sysctlN("kern.version")
+	output, err := sysctlN("kern.osrelease")
 	if err != nil {
 		return "unknown"
 	}
