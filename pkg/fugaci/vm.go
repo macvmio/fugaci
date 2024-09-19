@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/tomekjarosik/fugaci/pkg/logline"
 	"github.com/tomekjarosik/fugaci/pkg/sshrunner"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -48,7 +49,7 @@ type VM struct {
 	puller         Puller
 	sshRunner      SSHRunner
 	pod            *v1.Pod
-	containerIndex int
+	containerIndex *atomic.Int32
 
 	lifetimeCtx context.Context
 	cancelFunc  context.CancelCauseFunc
@@ -60,7 +61,8 @@ type VM struct {
 	sshDialInfo sshrunner.DialInfo
 	env         []v1.EnvVar
 
-	logger *log.Logger
+	logger  *log.Logger
+	logLine *logline.LogLine
 }
 
 func NewVM(ctx context.Context, virt Virtualization, puller Puller, sshRunner SSHRunner, pod *v1.Pod, containerIndex int) (*VM, error) {
@@ -102,13 +104,16 @@ func NewVM(ctx context.Context, virt Virtualization, puller Puller, sshRunner SS
 		return nil, fmt.Errorf("env var not found: %v", SshPasswordEnvVar)
 	}
 
+	var aContainerIndex atomic.Int32
+	aContainerIndex.Store(int32(containerIndex)) // Safely initialize atomic.Int64 from int
+
 	return &VM{
 		virt:      virt,
 		puller:    puller,
 		sshRunner: sshRunner,
 
 		pod:            pod,
-		containerIndex: containerIndex,
+		containerIndex: &aContainerIndex,
 
 		lifetimeCtx: lifetimeCtx,
 		cancelFunc:  cancelFunc,
@@ -117,8 +122,9 @@ func NewVM(ctx context.Context, virt Virtualization, puller Puller, sshRunner SS
 			Username: username,
 			Password: password,
 		},
-		env:    envVars,
-		logger: customLogger,
+		env:     envVars,
+		logger:  customLogger,
+		logLine: logline.New(customLogger),
 	}, nil
 }
 
@@ -128,6 +134,10 @@ func (s *VM) LifetimeContext() context.Context {
 
 func (s *VM) terminateWithError(reason string, err error) {
 	// Must be safe to run from multiple goroutines
+	s.logLine.Add("action", "terminateWithError")
+	s.logLine.Add("reason", reason)
+	s.logLine.Add("error", err)
+
 	s.logger.Printf("vm terminated because '%s': %v", reason, err)
 	prevStatus := s.GetContainerStatus()
 	st := v1.ContainerState{Terminated: &v1.ContainerStateTerminated{
@@ -147,21 +157,20 @@ func (s *VM) terminateWithError(reason string, err error) {
 	s.cancelFunc(fmt.Errorf("terminated because of '%s': %s", reason, err.Error()))
 }
 
-func (s *VM) updateStatus(f func(s *v1.ContainerStatus)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	f(&s.pod.Status.ContainerStatuses[s.containerIndex])
+func (s *VM) updateStatus(updateFunc func(s *v1.ContainerStatus)) {
+	s.safeUpdatePod(func(pod *v1.Pod) {
+		updateFunc(&pod.Status.ContainerStatuses[s.containerIndex.Load()])
+	})
 }
 
 func (s *VM) safeUpdatePodIP(ip net.IP) {
 	s.safeUpdatePod(func(pod *v1.Pod) {
 		pod.Status.PodIP = ip.String()
+
+		// TODO: Move conditions elsewhere
 		if pod.Status.Conditions == nil {
 			pod.Status.Conditions = []v1.PodCondition{}
 		}
-		s.sshDialInfo.Address = fmt.Sprintf("%s:%d", ip, VmSshPort)
-
 		pod.Status.Conditions = append(pod.Status.Conditions, v1.PodCondition{
 			Type:          v1.PodReady,
 			Status:        v1.ConditionTrue,
@@ -173,14 +182,19 @@ func (s *VM) safeUpdatePodIP(ip net.IP) {
 			LastProbeTime: metav1.Now(),
 		})
 	})
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.sshDialInfo.Address = fmt.Sprintf("%s:%d", ip, VmSshPort)
 }
 
-func (s *VM) waitAndRunCommandInside(ctx context.Context, container v1.Container, containerID string) {
-	ip := s.WaitForIP(ctx, containerID)
+func (s *VM) waitAndRunCommandInside(ctx context.Context, startedAt time.Time, containerID string) {
+	ip := s.waitForIP(ctx, containerID)
 	if ip == nil {
 		return
 	}
 	s.safeUpdatePodIP(ip)
+	s.logLine.Add("ip", ip)
 
 	retriesCount := 50
 	var err error
@@ -189,6 +203,7 @@ func (s *VM) waitAndRunCommandInside(ctx context.Context, container v1.Container
 		ctx2, cancel := context.WithTimeout(ctx, 1*time.Second)
 		err = s.RunCommand(ctx2, []string{"echo", "hello"}, sshrunner.WithTimeout(900*time.Millisecond))
 		if err == nil {
+			s.logLine.AddElapsedTimeSince("sshReady", startedAt)
 			cancel()
 			break
 		}
@@ -197,6 +212,8 @@ func (s *VM) waitAndRunCommandInside(ctx context.Context, container v1.Container
 		time.Sleep(500 * time.Millisecond)
 	}
 	if err != nil {
+		s.logLine.Add("state", "sshNotReady")
+		s.logLine.AddElapsedTimeSince("sshNotReady", startedAt)
 		s.logger.Printf("failed to establish SSH session")
 		return
 	}
@@ -206,10 +223,14 @@ func (s *VM) waitAndRunCommandInside(ctx context.Context, container v1.Container
 		st.Started = &v
 	})
 	s.logger.Printf("successfully established SSH session")
-	err = s.RunCommand(ctx, s.GetCommand(), sshrunner.WithEnv(s.GetEnvVars()))
+	command := s.GetCommand()
+	s.logLine.Add("command", command)
+	err = s.RunCommand(ctx, command, sshrunner.WithEnv(s.GetEnvVars()))
 	if err != nil {
-		s.logger.Printf("command finished with error: %v", err)
+		s.logLine.Add("containerCommandErr", err)
+		s.logger.Printf("command '%v' finished with error: %v", s.GetCommand(), err)
 	}
+	s.logLine.AddElapsedTimeSince("commandFinished", startedAt)
 	s.logger.Printf("waitAndRunCommandInside has finished")
 }
 
@@ -223,6 +244,8 @@ func (s *VM) Run() {
 		})
 	}()
 
+	initTime := time.Now()
+
 	if len(s.GetContainerStatus().ContainerID) == 0 {
 		s.safeUpdateState(v1.ContainerState{Waiting: &v1.ContainerStateWaiting{Reason: "Pulling"}})
 		spec := s.GetContainerSpec()
@@ -231,11 +254,18 @@ func (s *VM) Run() {
 				Waiting: &st,
 			})
 		})
+		s.logLine.Add("action", "pulling")
+		s.logLine.Add("spec.image", spec.Image)
+		s.logLine.Add("imageID", imageID)
 		if err != nil {
+			s.logLine.Add("err", err)
 			s.terminateWithError("unable to pull image", err)
 			return
 		}
-		s.logger.Printf("pulled image: %v (%v)", spec.Image, imageID)
+		s.logLine.Add("pulling", "success")
+		s.logLine.AddElapsedTimeSince("pulling", initTime)
+		s.logger.Printf("pulled image: %v (ID: %v)", spec.Image, imageID)
+
 		s.safeUpdateState(v1.ContainerState{Waiting: &v1.ContainerStateWaiting{Reason: "Pulled"}})
 
 		containerID, err := s.virt.Create(s.lifetimeCtx, *s.pod.DeepCopy(), 0)
@@ -244,6 +274,10 @@ func (s *VM) Run() {
 			return
 		}
 		s.logger.Printf("created container from image '%v': %v", spec.Image, containerID)
+		s.logLine.Add("state", "created")
+		s.logLine.Add("containerID", containerID)
+		s.logLine.AddElapsedTimeSince("created", initTime)
+
 		s.updateStatus(func(st *v1.ContainerStatus) {
 			st.ContainerID = containerID
 			st.Image = spec.Image
@@ -271,22 +305,25 @@ func (s *VM) Run() {
 	startedAt := metav1.Now()
 	s.safeUpdateState(v1.ContainerState{Running: &v1.ContainerStateRunning{StartedAt: startedAt}})
 	s.logger.Printf("started container '%v': %v", containerID, runCmd)
+	s.logLine.AddElapsedTimeSince("started", initTime)
 	s.containerPID.Store(int64(runCmd.Process.Pid))
 
 	s.wg.Add(1)
-	go func(c v1.Container, cID string) {
+	go func(startedAt time.Time, cID string) {
 		defer s.wg.Done()
-		s.waitAndRunCommandInside(s.lifetimeCtx, c, cID)
+		s.waitAndRunCommandInside(s.lifetimeCtx, startedAt, cID)
 		s.logger.Printf("goroutine finished running command inside container")
-	}(s.GetContainerSpec(), containerID)
+	}(startedAt.Time, containerID)
 
 	err = runCmd.Wait()
 	if err != nil {
+		s.logLine.Add("runCmdErr", err)
 		s.logger.Printf("ProcessState at exit: %v, code=%d", runCmd.ProcessState.String(), runCmd.ProcessState.ExitCode())
-		s.terminateWithError("error while running container", fmt.Errorf("'%s' command failed: %w", runCmd, err))
+		s.terminateWithError("error from runCmd.Wait()", fmt.Errorf("'%s' command failed: %w", runCmd, err))
 		return
 	}
 
+	s.logLine.Add("state", "finishedSuccessfully")
 	s.logger.Printf("container '%v' finished successfully: %v, exit code=%d\n", containerID, runCmd, runCmd.ProcessState.ExitCode())
 	s.safeUpdateState(v1.ContainerState{Terminated: &v1.ContainerStateTerminated{
 		ExitCode:    int32(runCmd.ProcessState.ExitCode()),
@@ -302,28 +339,32 @@ func (s *VM) Run() {
 	s.cancelFunc(nil)
 }
 
-func (s *VM) Status() v1.ContainerStatus {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.pod.Status.ContainerStatuses[s.containerIndex]
-}
-
 func (s *VM) Cleanup() error {
+	defer s.logLine.Log()
+
+	cleanupTimestamp := time.Now()
 	stopCtx, cancelStopCtx := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelStopCtx()
 
+	s.logLine.Add("action", "cleanup")
+	defer s.logLine.AddElapsedTimeSince("cleanup", cleanupTimestamp)
+
 	err := s.virt.Stop(stopCtx, int(s.containerPID.Load()))
 	if err == nil {
+		s.logLine.Add("stop", "ok")
 		s.logger.Printf("stopped VM gracefully")
 	} else {
+		s.logLine.Add("stop", err)
 		s.logger.Printf("failed to stop VM gracefully: %v", err)
 		p, err := os.FindProcess(int(s.containerPID.Load()))
 		if err != nil {
+			s.logLine.Add("noProcess", err)
 			return fmt.Errorf("could not find process %d: %v", s.containerPID.Load(), err)
 		}
 		defer p.Release()
 		err = p.Kill()
 		if err != nil && !errors.Is(err, os.ErrProcessDone) {
+			s.logLine.Add("killError", err)
 			return err
 		}
 	}
@@ -331,6 +372,7 @@ func (s *VM) Cleanup() error {
 	s.cancelFunc(errors.New("aborted by user"))
 	s.logger.Printf("waiting for vm.Run() to complete its operations")
 	s.wg.Wait()
+
 	s.logger.Printf("vm.Run() has completed waiting")
 	st := s.Status()
 	if len(st.ContainerID) > 0 {
@@ -340,7 +382,7 @@ func (s *VM) Cleanup() error {
 	return nil
 }
 
-func (s *VM) WaitForIP(ctx context.Context, containerID string) net.IP {
+func (s *VM) waitForIP(ctx context.Context, containerID string) net.IP {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -383,36 +425,27 @@ func (s *VM) IsReady() bool {
 	return st.Ready
 }
 
-func (s *VM) safeUpdateState(state v1.ContainerState) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.pod.Status.ContainerStatuses[s.containerIndex].State = state
+func (s *VM) Status() v1.ContainerStatus {
+	podCopy := s.safeGetPod()
+	return podCopy.Status.ContainerStatuses[s.containerIndex.Load()]
 }
 
 func (s *VM) GetContainerStatus() v1.ContainerStatus {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.pod.Status.ContainerStatuses[s.containerIndex]
+	podCopy := s.safeGetPod()
+	return podCopy.Status.ContainerStatuses[s.containerIndex.Load()]
 }
 
 func (s *VM) GetContainerSpec() v1.Container {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.pod.Spec.Containers[s.containerIndex]
+	podCopy := s.safeGetPod()
+	return podCopy.Spec.Containers[s.containerIndex.Load()]
 }
 func (s *VM) GetPod() *v1.Pod {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.pod.DeepCopy()
+	return s.safeGetPod()
 }
 
 func (s *VM) GetCommand() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	original := s.pod.Spec.Containers[s.containerIndex].Command
-	res := make([]string, len(original))
-	copy(res, original)
-	return res
+	podCopy := s.safeGetPod()
+	return podCopy.Spec.Containers[s.containerIndex.Load()].Command
 }
 
 func (s *VM) GetEnvVars() []v1.EnvVar {
@@ -423,6 +456,18 @@ func (s *VM) GetEnvVars() []v1.EnvVar {
 	copy(res, s.env)
 
 	return res
+}
+
+func (s *VM) safeUpdateState(state v1.ContainerState) {
+	s.safeUpdatePod(func(pod *v1.Pod) {
+		pod.Status.ContainerStatuses[s.containerIndex.Load()].State = state
+	})
+}
+
+func (s *VM) safeGetPod() *v1.Pod {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.pod.DeepCopy()
 }
 
 func (s *VM) safeUpdatePod(update func(pod *v1.Pod)) {

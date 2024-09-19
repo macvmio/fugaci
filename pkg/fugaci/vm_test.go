@@ -389,7 +389,7 @@ func TestVM_Run_ProcessIsHanging(t *testing.T) {
 	status = vm.Status()
 	require.NotNil(t, status.State.Terminated, "Container should still be running")
 	assert.NotEmpty(t, status.State.Terminated.StartedAt, "Container should have a start time")
-	assert.Equal(t, "error while running container", status.State.Terminated.Reason)
+	assert.Equal(t, "error from runCmd.Wait()", status.State.Terminated.Reason)
 	assert.Equal(t, "'/usr/bin/sleep 30' command failed: signal: killed", status.State.Terminated.Message)
 	assert.False(t, status.Ready, "Container should not be ready")
 }
@@ -477,99 +477,7 @@ func TestVM_Cleanup_CalledWhilePulling_mustExitQuickly(t *testing.T) {
 	assert.Contains(t, status.State.Terminated.Message, "context cancelled")
 }
 
-/*
-func TestVM_Env(t *testing.T) {
-	pod := &v1.Pod{
-		Spec: v1.PodSpec{
-			Containers: []v1.Container{
-				{
-					Env: []v1.EnvVar{
-						{Name: SshUsernameEnvVar, Value: "user1"},
-						{Name: SshPasswordEnvVar, Value: "pass1"},
-						{Name: "OTHER_ENV_VAR", Value: ""},
-					},
-				},
-			},
-		},
-	}
-
-	vm := NewVM()
-
-	envVars := vm.env()
-
-	assert.Equal(t, "user1", envVars[SshUsernameEnvVar], "Expected FUGACI_SSH_USERNAME_ENVVAR to be 'user1'")
-	assert.Equal(t, "pass1", envVars[SshPasswordEnvVar], "Expected FUGACI_SSH_PASSWORD_ENVVAR to be 'pass1'")
-	assert.NotContains(t, envVars, "OTHER_ENV_VAR", "OTHER_ENV_VAR should not be present because its value is empty")
-}
-*/
-
-/*
-func TestVM_GetSSHConfig(t *testing.T) {
-	pod := &v1.Pod{
-		Spec: v1.PodSpec{
-			Containers: []v1.Container{
-				{
-					Env: []v1.EnvVar{
-						{Name: SshUsernameEnvVar, Value: "user1"},
-						{Name: SshPasswordEnvVar, Value: "pass1"},
-					},
-				},
-			},
-		},
-	}
-
-	vm := &VM{
-		pod:            pod,
-		containerIndex: 0,
-	}
-
-	t.Run("valid ssh config", func(t *testing.T) {
-		sshConfig, err := vm.getSSHConfig()
-		assert.NoError(t, err, "Expected no error from getSSHConfig")
-		assert.Equal(t, "user1", sshConfig.User, "Expected SSH username to be 'user1'")
-		assert.Len(t, sshConfig.Auth, 1, "Expected one SSH auth method")
-		assert.Implements(t, (*ssh.AuthMethod)(nil), sshConfig.Auth[0], "Expected password-based auth method")
-	})
-
-	t.Run("missing SSH username", func(t *testing.T) {
-		// Test missing SSH username
-		vm.pod.Spec.Containers[0].Env = []v1.EnvVar{
-			{Name: SshPasswordEnvVar, Value: "pass1"},
-		}
-		_, err := vm.getSSHConfig()
-		assert.Error(t, err, "Expected error when SSH username is missing")
-	})
-
-	t.Run("missing SSH password", func(t *testing.T) {
-		vm.pod.Spec.Containers[0].Env = []v1.EnvVar{
-			{Name: SshUsernameEnvVar, Value: "user1"},
-		}
-		_, err := vm.getSSHConfig()
-		assert.Error(t, err, "Expected error when SSH password is missing")
-	})
-}
-*/
-
 func TestVM_RunCommand(t *testing.T) {
-
-	// Helper function to run the command and check errors
-	runAndCheckError := func(t *testing.T, podSetupFunc func(*v1.Pod), expectedError string) {
-		ctx := context.Background()
-		vm, _, _, _, _ := setupCommonTestVM(t, podSetupFunc)
-		err := vm.RunCommand(ctx, []string{"echo", "123"})
-		assert.ErrorContains(t, err, expectedError)
-	}
-
-	t.Run("pod missing IP address", func(t *testing.T) {
-		runAndCheckError(t, func(pod *v1.Pod) {
-			pod.Spec.Containers = []v1.Container{
-				{Name: "test123", Env: []v1.EnvVar{
-					{Name: SshUsernameEnvVar, Value: "u"},
-					{Name: SshPasswordEnvVar, Value: "p"},
-				}},
-			}
-		}, "no pod IP found")
-	})
 
 	t.Run("pod ready with SSH session running", func(t *testing.T) {
 		vm, _, _, mockSSHRunner, _ := setupCommonTestVM(t, func(pod *v1.Pod) {

@@ -4,7 +4,7 @@ metadata:
   name: testpod3
 spec:
   containers:
-    - image: macvm.store/repo/base-runner:1.4
+    - image: macvm.store/repo/base-runner:1.6
       imagePullPolicy: Never
       command: [ "sleep", "1000000" ]
       name: curie3
