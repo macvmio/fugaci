@@ -106,7 +106,7 @@ func TestVirtualization_Create(t *testing.T) {
 			assert.NoError(t, err)
 			defer removeTestScript(scriptPath)
 
-			v := NewVirtualization(scriptPath)
+			v := NewVirtualization(scriptPath, "/tmp/data/dir/path")
 			containerID, err := v.Create(context.Background(), tt.pod, tt.containerIndex)
 
 			if tt.expectError {
@@ -132,7 +132,7 @@ func TestVirtualization_Start(t *testing.T) {
 	assert.NoError(t, err)
 	defer removeTestScript(scriptPath)
 
-	v := NewVirtualization(scriptPath)
+	v := NewVirtualization(scriptPath, "/tmp/data/dir/path")
 	cmd, err := v.Start(context.Background(), "container123")
 	assert.NoError(t, err)
 
@@ -154,7 +154,7 @@ func TestVirtualization_Stop_whenProcessIsHanging_mustBeKilledAfterGracePeriod(t
 	assert.NoError(t, err)
 	defer removeTestScript(scriptPath)
 
-	v := NewVirtualization(scriptPath)
+	v := NewVirtualization(scriptPath, "/tmp/data/dir/path")
 	cmd, err := v.Start(context.Background(), "container123")
 	assert.NoError(t, err)
 
@@ -189,7 +189,7 @@ func TestVirtualization_Stop_mustReactToSIGTERM_andStopGracefully(t *testing.T) 
 		assert.NoError(t, err)
 		defer removeTestScript(scriptPath)
 
-		v := NewVirtualization(scriptPath)
+		v := NewVirtualization(scriptPath, "/tmp/data/dir/path")
 		cmd, err := v.Start(context.Background(), "container123")
 		assert.NoError(t, err)
 
@@ -233,7 +233,7 @@ func TestVirtualization_Remove(t *testing.T) {
 	assert.NoError(t, err)
 	defer removeTestScript(scriptPath)
 
-	v := NewVirtualization(scriptPath)
+	v := NewVirtualization(scriptPath, "/tmp/data/dir/path")
 	err = v.Destroy(context.Background(), "container123")
 	assert.NoError(t, err)
 }
@@ -249,7 +249,7 @@ func TestVirtualization_Inspect(t *testing.T) {
 	assert.NoError(t, err)
 	defer removeTestScript(scriptPath)
 
-	v := NewVirtualization(scriptPath)
+	v := NewVirtualization(scriptPath, "/tmp/data/dir/path")
 	resp, err := v.Inspect(context.Background(), "container123")
 	assert.NoError(t, err)
 	assert.NotNil(t, resp)
@@ -269,7 +269,7 @@ func TestVirtualization_IP(t *testing.T) {
 		assert.NoError(t, err)
 		defer removeTestScript(scriptPath)
 
-		v := NewVirtualization(scriptPath)
+		v := NewVirtualization(scriptPath, "/tmp/data/dir/path")
 		ip, err := v.IP(context.Background(), "container123")
 		assert.NoError(t, err)
 		assert.Equal(t, net.ParseIP("192.168.1.10"), ip)
@@ -287,7 +287,7 @@ func TestVirtualization_IP(t *testing.T) {
 		assert.NoError(t, err)
 		defer removeTestScript(scriptPath)
 
-		v := NewVirtualization(scriptPath)
+		v := NewVirtualization(scriptPath, "/tmp/data/dir/path")
 		ip, err := v.IP(context.Background(), "container123")
 		assert.Error(t, err)
 		assert.Nil(t, ip)
@@ -329,7 +329,7 @@ func TestVirtualization_Exists(t *testing.T) {
 			assert.NoError(t, err)
 			defer removeTestScript(scriptPath)
 
-			v := NewVirtualization(scriptPath)
+			v := NewVirtualization(scriptPath, "/tmp/data/dir/path")
 			exists, err := v.Exists(context.Background(), "container123")
 
 			assert.NoError(t, err)

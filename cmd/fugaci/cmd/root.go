@@ -33,6 +33,7 @@ func InitializeCommands() *cobra.Command {
 
 	rootCmd.AddCommand(
 		NewCmdServe(),
+		NewCmdDaemon(),
 	)
 
 	return rootCmd

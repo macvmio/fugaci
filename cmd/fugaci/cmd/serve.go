@@ -32,7 +32,7 @@ func NewCmdServe() *cobra.Command {
 				fmt.Printf("Unable to decode into struct, %v", err)
 				return
 			}
-			fmt.Printf("Starting Fugaci provider with config: %+v", cfg)
+			fmt.Printf("Starting Fugaci provider with config: %+v\n", cfg)
 
 			logger := logrus.StandardLogger()
 			lvl, err := logrus.ParseLevel(cfg.LogLevel)

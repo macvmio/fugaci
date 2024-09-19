@@ -17,16 +17,22 @@ import (
 )
 
 type Virtualization struct {
-	curieBinaryPath string
+	curieBinaryPath   string
+	curieDataRootPath string
 }
 
-func NewVirtualization(curieBinaryPath string) *Virtualization {
+func NewVirtualization(curieBinaryPath string, curieDataRootPath string) *Virtualization {
 	return &Virtualization{
-		curieBinaryPath: curieBinaryPath,
+		curieBinaryPath:   curieBinaryPath,
+		curieDataRootPath: curieDataRootPath,
 	}
 }
 
 var ErrNotExists = errors.New("not exists")
+
+func (s *Virtualization) prepareEnv(cmd *exec.Cmd) {
+	cmd.Env = append(os.Environ(), "CURIE_DATA_ROOT="+s.curieDataRootPath)
+}
 
 func (s *Virtualization) Create(ctx context.Context, pod v1.Pod, containerIndex int) (containerID string, err error) {
 	containerSpec := pod.Spec.Containers[containerIndex]
@@ -39,6 +45,7 @@ func (s *Virtualization) Create(ctx context.Context, pod v1.Pod, containerIndex 
 	}
 	args := []string{"create", containerSpec.Image, "--name", name}
 	cmd := exec.CommandContext(ctx, s.curieBinaryPath, args...)
+	s.prepareEnv(cmd)
 	log.Print(cmd)
 	out, err := cmd.Output()
 	if err != nil {
@@ -52,6 +59,7 @@ func (s *Virtualization) Create(ctx context.Context, pod v1.Pod, containerIndex 
 func (s *Virtualization) Start(ctx context.Context, containerID string) (runCommand *exec.Cmd, err error) {
 	args := []string{"start", "--no-window", containerID}
 	cmd := exec.CommandContext(ctx, s.curieBinaryPath, args...)
+	s.prepareEnv(cmd)
 	// TODO: Use command cancel here!!
 	//cmd.Cancel = func() error {
 	//	s.Stop()
@@ -103,7 +111,9 @@ func (s *Virtualization) Stop(ctx context.Context, containerRunCmdPid int) error
 }
 
 func (s *Virtualization) Destroy(ctx context.Context, containerID string) error {
-	err := exec.CommandContext(ctx, s.curieBinaryPath, "rm", containerID).Run()
+	cmd := exec.CommandContext(ctx, s.curieBinaryPath, "rm", containerID)
+	s.prepareEnv(cmd)
+	err := cmd.Run()
 	log.Printf("removed container '%v': err=%v", containerID, err)
 	return err
 }
@@ -113,6 +123,7 @@ func (s *Virtualization) Inspect(ctx context.Context, containerID string) (*Insp
 	// Execute the "inspect" command and capture its output.
 	var stdout bytes.Buffer
 	cmd := exec.CommandContext(ctx, s.curieBinaryPath, "inspect", containerID, "--format", "json")
+	s.prepareEnv(cmd)
 	cmd.Stdout = &stdout // Capture standard output
 	cmd.Stderr = &stdout // Optionally, capture standard error as well for detailed error messages
 

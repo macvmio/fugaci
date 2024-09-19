@@ -16,6 +16,7 @@ import (
 	"io"
 	v1 "k8s.io/api/core/v1"
 	"log"
+	"path"
 	"strings"
 	"sync"
 )
@@ -41,8 +42,8 @@ type Provider struct {
 func NewProvider(appCtx context.Context, cfg Config) (*LoggingProvider, error) {
 	return NewLoggingProvider(&Provider{
 		appContext: appCtx,
-		puller:     NewGeranosPuller(cfg.CurieImagesPath),
-		virt:       curie.NewVirtualization(cfg.CurieBinaryPath),
+		puller:     NewGeranosPuller(path.Join(cfg.CurieDataRootPath, "images")),
+		virt:       curie.NewVirtualization(cfg.CurieBinaryPath, cfg.CurieDataRootPath),
 		cfg:        cfg,
 		vms:        [2]*VM{},
 	}), nil
