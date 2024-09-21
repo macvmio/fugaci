@@ -25,7 +25,7 @@ func NewCmdServe() *cobra.Command {
 		Use:   "serve",
 		Short: "Start Fugaci provider for virtual-kubelet",
 		Long:  `Start Fugaci provider for virtual-kubelet`,
-		Args:  cobra.ExactArgs(0),
+		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
 			var cfg fugaci.Config
 			if err := viper.Unmarshal(&cfg); err != nil {

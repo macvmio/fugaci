@@ -12,11 +12,11 @@ import (
 func InitializeCommands() *cobra.Command {
 	cobra.OnInitialize(initConfig)
 	var rootCmd = &cobra.Command{
-		Use:   "fugaci",
-		Short: "Fugaci is a virtual-kubelet provider.",
-		Long:  `Fugaci is a virtual-kubelet provider which integrates with macOS VM virtualization tool called Curie`,
-		// This function can be used to execute any code when the root command is called without any subcommands
-		Args:                       cobra.ExactArgs(1),
+		Use:                        "fugaci",
+		Short:                      "Fugaci is a kubelet-like provider.",
+		Long:                       `Fugaci is a kubelet-like provider which integrates with macOS VM virtualization tool called Curie`,
+		ValidArgs:                  []string{"serve", "daemon", "settings"},
+		Args:                       cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs),
 		SuggestionsMinimumDistance: 2,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fmt.Println(cmd.Short)
@@ -34,6 +34,7 @@ func InitializeCommands() *cobra.Command {
 	rootCmd.AddCommand(
 		NewCmdServe(),
 		NewCmdDaemon(),
+		NewCmdSettings(),
 	)
 
 	return rootCmd
