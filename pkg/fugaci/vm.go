@@ -189,21 +189,32 @@ func (s *VM) safeUpdatePodIP(ip net.IP) {
 }
 
 func (s *VM) waitAndRunCommandInside(ctx context.Context, startedAt time.Time, containerID string) {
-	ip := s.waitForIP(ctx, containerID)
+
+	waitCtx, waitForIpCancelFunc := context.WithTimeout(ctx, 60*time.Second)
+	defer waitForIpCancelFunc()
+	ip := s.waitForIP(waitCtx, containerID)
+
+	s.logLine.Add("ip", ip)
+	defer s.logger.Printf("waitAndRunCommandInside has finished")
+
 	if ip == nil {
 		return
 	}
 	s.safeUpdatePodIP(ip)
-	s.logLine.Add("ip", ip)
 
 	retriesCount := 50
 	var err error
 
 	for i := 0; i < retriesCount; i++ {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+			break
+		}
 		ctx2, cancel := context.WithTimeout(ctx, 1*time.Second)
 		err = s.RunCommand(ctx2, []string{"echo", "hello"}, sshrunner.WithTimeout(900*time.Millisecond))
 		if err == nil {
-			s.logLine.AddElapsedTimeSince("sshReady", startedAt)
+			s.logLine.Add("state", "SSHReady")
+			s.logLine.AddElapsedTimeSince("SSHReady", startedAt)
 			cancel()
 			break
 		}
@@ -211,6 +222,7 @@ func (s *VM) waitAndRunCommandInside(ctx context.Context, startedAt time.Time, c
 		s.logger.Printf("SSH not ready yet: %v", err)
 		time.Sleep(500 * time.Millisecond)
 	}
+	// tried too many times and there is still error
 	if err != nil {
 		s.logLine.Add("state", "sshNotReady")
 		s.logLine.AddElapsedTimeSince("sshNotReady", startedAt)
@@ -231,7 +243,6 @@ func (s *VM) waitAndRunCommandInside(ctx context.Context, startedAt time.Time, c
 		s.logger.Printf("command '%v' finished with error: %v", s.GetCommand(), err)
 	}
 	s.logLine.AddElapsedTimeSince("commandFinished", startedAt)
-	s.logger.Printf("waitAndRunCommandInside has finished")
 }
 
 func (s *VM) Run() {
@@ -377,7 +388,12 @@ func (s *VM) Cleanup() error {
 	st := s.Status()
 	if len(st.ContainerID) > 0 {
 		s.logger.Printf("cleaning up ephemeral container %v", st.ContainerID)
-		return s.virt.Destroy(context.Background(), st.ContainerID)
+		err2 := s.virt.Destroy(context.Background(), st.ContainerID)
+		if err2 != nil {
+			s.logger.Printf("failed to destroy container: %v", err2)
+			s.logLine.Add("cleanUpError", err2)
+		}
+		return err2
 	}
 	return nil
 }
