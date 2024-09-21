@@ -1,0 +1,59 @@
+pipeline {
+    agent {
+        kubernetes {
+            defaultContainer 'jnlp'
+            yaml """
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+    - name: jnlp
+      image: macvm.store/repo/base-runner:1.6
+      imagePullPolicy: Never
+      workingDir: /Users/agent/jenkins
+      command:
+        - "sh"
+        - "-c"
+        - |
+          curl -sO \$JENKINS_URL/jnlpJars/agent.jar && \
+          java -jar agent.jar -url \$JENKINS_URL -secret \$JENKINS_SECRET \
+          -name "\$JENKINS_AGENT_NAME" -webSocket -workDir "/Users/agent/jenkins"
+      env:
+        - name: KUBERNETES_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: KUBERNETES_POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: KUBERNETES_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName  # This field points to the NodeName
+      envFrom:
+        - secretRef:
+            name: fugaci-ssh-secret
+  restartPolicy: OnFailure
+  nodeSelector:
+    kubernetes.io/os: darwin
+  tolerations:
+    - key: "fugaci.jarosik.online"
+      operator: "Equal"
+      value: "true"
+      effect: "NoSchedule"
+"""
+        }
+    }
+
+    stages {
+        stage('Build') {
+            steps {
+                container('jnlp') {
+                    sh 'echo "Running in macOS!"'
+                    sh 'env'
+                }
+            }
+        }
+    }
+}
