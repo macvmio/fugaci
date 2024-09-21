@@ -113,24 +113,39 @@ func (s *Virtualization) Stop(ctx context.Context, containerRunCmdPid int) error
 func (s *Virtualization) Destroy(ctx context.Context, containerID string) error {
 	cmd := exec.CommandContext(ctx, s.curieBinaryPath, "rm", containerID)
 	s.prepareEnv(cmd)
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout // Capture standard output
 	err := cmd.Run()
-	log.Printf("removed container '%v': err=%v", containerID, err)
+	if err != nil {
+		if err2 := s.isKnownError(stdout.String()); errors.Is(err2, ErrNotExists) {
+			log.Printf("destroy container '%v': no longer exists", containerID)
+			return nil
+		}
+	}
+	log.Printf("destroy container '%v': err=%v", containerID, err)
 	return err
+}
+
+func (s *Virtualization) isKnownError(output string) (err error) {
+	if strings.Contains(output, "Cannot find the container") {
+		return ErrNotExists
+	}
+	return nil
 }
 
 // Inspect runs the inspect command on the specified container and returns the inspection result.
 func (s *Virtualization) Inspect(ctx context.Context, containerID string) (*InspectResponse, error) {
 	// Execute the "inspect" command and capture its output.
-	var stdout bytes.Buffer
 	cmd := exec.CommandContext(ctx, s.curieBinaryPath, "inspect", containerID, "--format", "json")
 	s.prepareEnv(cmd)
+
+	var stdout bytes.Buffer
 	cmd.Stdout = &stdout // Capture standard output
 	cmd.Stderr = &stdout // Optionally, capture standard error as well for detailed error messages
 
 	if err := cmd.Run(); err != nil {
-		// Return more information by including the output of the command (if any) in the error message.
-		if strings.Contains(stdout.String(), "Cannot find the container") {
-			return nil, ErrNotExists
+		if err2 := s.isKnownError(stdout.String()); err2 != nil {
+			return nil, err2
 		}
 		return nil, fmt.Errorf("failed to execute inspect command: %v, output: %s", err, stdout.String())
 	}

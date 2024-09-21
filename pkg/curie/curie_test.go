@@ -222,10 +222,16 @@ func TestVirtualization_Stop_mustReactToSIGTERM_andStopGracefully(t *testing.T) 
 
 }
 
-func TestVirtualization_Remove(t *testing.T) {
+func TestVirtualization_Destroy(t *testing.T) {
+	// Single script that reacts to $2 param (containerID)
 	scriptContent := `#!/bin/bash
 	if [ "$1" == "rm" ]; then
-		exit 0
+		if [ "$2" == "container123" ]; then
+			exit 0
+		else
+			echo "Error: Cannot find the container"
+			exit 1
+		fi
 	else
 		exit 1
 	fi`
@@ -233,9 +239,17 @@ func TestVirtualization_Remove(t *testing.T) {
 	assert.NoError(t, err)
 	defer removeTestScript(scriptPath)
 
-	v := NewVirtualization(scriptPath, "/tmp/data/dir/path")
-	err = v.Destroy(context.Background(), "container123")
-	assert.NoError(t, err)
+	t.Run("existing container", func(t *testing.T) {
+		v := NewVirtualization(scriptPath, "/tmp/data/dir/path")
+		err = v.Destroy(context.Background(), "container123")
+		assert.NoError(t, err)
+	})
+
+	t.Run("missing container", func(t *testing.T) {
+		v := NewVirtualization(scriptPath, "/tmp/data/dir/path")
+		err = v.Destroy(context.Background(), "container456") // Different containerID
+		assert.NoError(t, err)
+	})
 }
 
 func TestVirtualization_Inspect(t *testing.T) {
