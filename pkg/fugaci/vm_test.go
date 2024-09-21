@@ -298,7 +298,7 @@ func TestVM_Run_Successful_mustBeReadyWithIPAddress(t *testing.T) {
 	defer cleanup()
 	setupCommonMockVirt(mockPuller, mockVirt, mockSSHRunner, []string{"Pull", "IP", "Run"})
 	mockVirt.On("Create", mock.Anything, mock.Anything, mock.Anything).Return("containerid-123", nil)
-	cmd := exec.Command("/usr/bin/sleep", "0.3")
+	cmd := exec.Command("/bin/sleep", "0.3")
 	cmd.Start()
 	mockVirt.On("Start", mock.Anything, "containerid-123").Return(cmd, nil)
 
@@ -339,7 +339,7 @@ func TestVM_Run_Successful_mustRunContainerCommandThroughSSH(t *testing.T) {
 
 	setupCommonMockVirt(mockPuller, mockVirt, mockSSHRunner, []string{"Pull", "IP", "Run"})
 	mockVirt.On("Create", mock.Anything, mock.Anything, mock.Anything).Return("containerid-123", nil)
-	cmd := exec.Command("/usr/bin/sleep", "0.3")
+	cmd := exec.Command("/bin/sleep", "0.3")
 	cmd.Start()
 	mockVirt.On("Start", mock.Anything, "containerid-123").Return(cmd, nil)
 
@@ -385,7 +385,7 @@ func TestVM_Run_ProcessIsHanging(t *testing.T) {
 	setupCommonMockVirt(mockPuller, mockVirt, mockSSHRunner, []string{"Pull", "Create", "Run", "Destroy"})
 	mockVirt.On("IP", mock.Anything, mock.Anything).Return(nil, errors.New("IP not found"))
 
-	cmd := exec.Command("/usr/bin/sleep", "30")
+	cmd := exec.Command("/bin/sleep", "30")
 	cmd.Start()
 	mockVirt.On("Start", mock.Anything, "containerid-123").Return(cmd, nil)
 	mockVirt.On("Stop", mock.Anything, mock.Anything, mock.Anything).Return(errors.New("unable to stop VM"))
@@ -419,7 +419,7 @@ func TestVM_Run_ProcessIsHanging(t *testing.T) {
 	require.NotNil(t, status.State.Terminated, "Container should still be running")
 	assert.NotEmpty(t, status.State.Terminated.StartedAt, "Container should have a start time")
 	assert.Equal(t, "error from runCmd.Wait()", status.State.Terminated.Reason)
-	assert.Equal(t, "'/usr/bin/sleep 30' command failed: signal: killed", status.State.Terminated.Message)
+	assert.Equal(t, "'/bin/sleep 30' command failed: signal: killed", status.State.Terminated.Message)
 	assert.False(t, status.Ready, "Container should not be ready")
 }
 
@@ -428,7 +428,7 @@ func TestVM_Run_Success_CleanupMustBeGraceful(t *testing.T) {
 	defer cleanup()
 
 	setupCommonMockVirt(mockPuller, mockVirt, mockSSHRunner, []string{"Pull", "Create", "Run", "Destroy", "Stop"})
-	cmd := exec.Command("/usr/bin/sleep", "0.1")
+	cmd := exec.Command("/bin/sleep", "0.1")
 	cmd.Start()
 	mockVirt.On("Start", mock.Anything, "containerid-123").Return(cmd, nil)
 
@@ -458,7 +458,7 @@ func TestVM_Run_Successful_CleanupMustBeIdempotent(t *testing.T) {
 	defer cleanup()
 
 	setupCommonMockVirt(mockPuller, mockVirt, mockSSHRunner, []string{"Pull", "Create", "Run", "IP", "Destroy", "Stop"})
-	cmd := exec.Command("/usr/bin/sleep", "0.2")
+	cmd := exec.Command("/bin/sleep", "0.2")
 	cmd.Start()
 	mockVirt.On("Start", mock.Anything, "containerid-123").Return(cmd, nil)
 
