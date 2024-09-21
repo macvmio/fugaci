@@ -1,4 +1,4 @@
-package logline
+package storylog
 
 import (
 	"fmt"
@@ -11,16 +11,16 @@ type Logger interface {
 	Println(args ...any)
 }
 
-type LogLine struct {
+type StoryLog struct {
 	parts  []string
 	mu     sync.Mutex // To ensure thread-safety if used in concurrent environments
 	logger Logger     // Custom logger
 }
 
-// New initializes and returns a new LogLine instance with a custom logger
-func New(logger Logger) *LogLine {
+// New initializes and returns a new StoryLog instance with a custom logger
+func New(logger Logger) *StoryLog {
 
-	return &LogLine{
+	return &StoryLog{
 		parts:  make([]string, 0, 10), // Initial capacity to avoid frequent allocations
 		logger: logger,
 	}
@@ -28,7 +28,7 @@ func New(logger Logger) *LogLine {
 
 // Add adds a key=value pair to the log line
 // If the value contains whitespace, it adds quotes around it.
-func (l *LogLine) Add(key string, value interface{}) {
+func (l *StoryLog) Add(key string, value interface{}) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -45,7 +45,7 @@ func (l *LogLine) Add(key string, value interface{}) {
 }
 
 // Log prints the log line as a single entry
-func (l *LogLine) Log() {
+func (l *StoryLog) Log() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -53,7 +53,7 @@ func (l *LogLine) Log() {
 }
 
 // Clear clears the log line to reuse the instance
-func (l *LogLine) Clear() {
+func (l *StoryLog) Clear() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -61,7 +61,7 @@ func (l *LogLine) Clear() {
 }
 
 // AddTimeMs adds a key=value pair with a duration in milliseconds
-func (l *LogLine) AddTimeMs(key string, duration time.Duration) {
+func (l *StoryLog) AddTimeMs(key string, duration time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -69,7 +69,7 @@ func (l *LogLine) AddTimeMs(key string, duration time.Duration) {
 }
 
 // AddElapsedTimeSince adds the time elapsed since a given start time in milliseconds
-func (l *LogLine) AddElapsedTimeSince(key string, startTime time.Time) {
+func (l *StoryLog) AddElapsedTimeSince(key string, startTime time.Time) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 

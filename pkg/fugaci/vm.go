@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/tomekjarosik/fugaci/pkg/logline"
 	"github.com/tomekjarosik/fugaci/pkg/sshrunner"
+	"github.com/tomekjarosik/fugaci/pkg/storylog"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"log"
@@ -61,8 +61,8 @@ type VM struct {
 	sshDialInfo sshrunner.DialInfo
 	env         []v1.EnvVar
 
-	logger  *log.Logger
-	logLine *logline.LogLine
+	logger   *log.Logger
+	storyLog *storylog.StoryLog
 }
 
 func NewVM(ctx context.Context, virt Virtualization, puller Puller, sshRunner SSHRunner, pod *v1.Pod, containerIndex int) (*VM, error) {
@@ -122,9 +122,9 @@ func NewVM(ctx context.Context, virt Virtualization, puller Puller, sshRunner SS
 			Username: username,
 			Password: password,
 		},
-		env:     envVars,
-		logger:  customLogger,
-		logLine: logline.New(customLogger),
+		env:      envVars,
+		logger:   customLogger,
+		storyLog: storylog.New(customLogger),
 	}, nil
 }
 
@@ -134,9 +134,9 @@ func (s *VM) LifetimeContext() context.Context {
 
 func (s *VM) terminateWithError(reason string, err error) {
 	// Must be safe to run from multiple goroutines
-	s.logLine.Add("action", "terminateWithError")
-	s.logLine.Add("reason", reason)
-	s.logLine.Add("error", err)
+	s.storyLog.Add("action", "terminateWithError")
+	s.storyLog.Add("reason", reason)
+	s.storyLog.Add("error", err)
 
 	s.logger.Printf("vm terminated because '%s': %v", reason, err)
 	prevStatus := s.GetContainerStatus()
@@ -194,7 +194,7 @@ func (s *VM) waitAndRunCommandInside(ctx context.Context, startedAt time.Time, c
 	defer waitForIpCancelFunc()
 	ip := s.waitForIP(waitCtx, containerID)
 
-	s.logLine.Add("ip", ip)
+	s.storyLog.Add("ip", ip)
 	defer s.logger.Printf("waitAndRunCommandInside has finished")
 
 	if ip == nil {
@@ -213,8 +213,8 @@ func (s *VM) waitAndRunCommandInside(ctx context.Context, startedAt time.Time, c
 		ctx2, cancel := context.WithTimeout(ctx, 1*time.Second)
 		err = s.RunCommand(ctx2, []string{"echo", "hello"}, sshrunner.WithTimeout(900*time.Millisecond))
 		if err == nil {
-			s.logLine.Add("state", "SSHReady")
-			s.logLine.AddElapsedTimeSince("SSHReady", startedAt)
+			s.storyLog.Add("state", "SSHReady")
+			s.storyLog.AddElapsedTimeSince("SSHReady", startedAt)
 			cancel()
 			break
 		}
@@ -224,8 +224,8 @@ func (s *VM) waitAndRunCommandInside(ctx context.Context, startedAt time.Time, c
 	}
 	// tried too many times and there is still error
 	if err != nil {
-		s.logLine.Add("state", "sshNotReady")
-		s.logLine.AddElapsedTimeSince("sshNotReady", startedAt)
+		s.storyLog.Add("state", "sshNotReady")
+		s.storyLog.AddElapsedTimeSince("sshNotReady", startedAt)
 		s.logger.Printf("failed to establish SSH session")
 		return
 	}
@@ -236,13 +236,13 @@ func (s *VM) waitAndRunCommandInside(ctx context.Context, startedAt time.Time, c
 	})
 	s.logger.Printf("successfully established SSH session")
 	command := s.GetCommand()
-	s.logLine.Add("command", command)
+	s.storyLog.Add("command", command)
 	err = s.RunCommand(ctx, command, sshrunner.WithEnv(s.GetEnvVars()))
 	if err != nil {
-		s.logLine.Add("containerCommandErr", err)
+		s.storyLog.Add("containerCommandErr", err)
 		s.logger.Printf("command '%v' finished with error: %v", s.GetCommand(), err)
 	}
-	s.logLine.AddElapsedTimeSince("commandFinished", startedAt)
+	s.storyLog.AddElapsedTimeSince("commandFinished", startedAt)
 }
 
 func (s *VM) Run() {
@@ -265,16 +265,16 @@ func (s *VM) Run() {
 				Waiting: &st,
 			})
 		})
-		s.logLine.Add("action", "pulling")
-		s.logLine.Add("spec.image", spec.Image)
-		s.logLine.Add("imageID", imageID)
+		s.storyLog.Add("action", "pulling")
+		s.storyLog.Add("spec.image", spec.Image)
+		s.storyLog.Add("imageID", imageID)
 		if err != nil {
-			s.logLine.Add("err", err)
+			s.storyLog.Add("err", err)
 			s.terminateWithError("unable to pull image", err)
 			return
 		}
-		s.logLine.Add("pulling", "success")
-		s.logLine.AddElapsedTimeSince("pulling", initTime)
+		s.storyLog.Add("pulling", "success")
+		s.storyLog.AddElapsedTimeSince("pulling", initTime)
 		s.logger.Printf("pulled image: %v (ID: %v)", spec.Image, imageID)
 
 		s.safeUpdateState(v1.ContainerState{Waiting: &v1.ContainerStateWaiting{Reason: "Pulled"}})
@@ -285,9 +285,9 @@ func (s *VM) Run() {
 			return
 		}
 		s.logger.Printf("created container from image '%v': %v", spec.Image, containerID)
-		s.logLine.Add("state", "created")
-		s.logLine.Add("containerID", containerID)
-		s.logLine.AddElapsedTimeSince("created", initTime)
+		s.storyLog.Add("state", "created")
+		s.storyLog.Add("containerID", containerID)
+		s.storyLog.AddElapsedTimeSince("created", initTime)
 
 		s.updateStatus(func(st *v1.ContainerStatus) {
 			st.ContainerID = containerID
@@ -316,7 +316,7 @@ func (s *VM) Run() {
 	startedAt := metav1.Now()
 	s.safeUpdateState(v1.ContainerState{Running: &v1.ContainerStateRunning{StartedAt: startedAt}})
 	s.logger.Printf("started container '%v': %v", containerID, runCmd)
-	s.logLine.AddElapsedTimeSince("started", initTime)
+	s.storyLog.AddElapsedTimeSince("started", initTime)
 	s.containerPID.Store(int64(runCmd.Process.Pid))
 
 	s.wg.Add(1)
@@ -328,13 +328,13 @@ func (s *VM) Run() {
 
 	err = runCmd.Wait()
 	if err != nil {
-		s.logLine.Add("runCmdErr", err)
+		s.storyLog.Add("runCmdErr", err)
 		s.logger.Printf("ProcessState at exit: %v, code=%d", runCmd.ProcessState.String(), runCmd.ProcessState.ExitCode())
 		s.terminateWithError("error from runCmd.Wait()", fmt.Errorf("'%s' command failed: %w", runCmd, err))
 		return
 	}
 
-	s.logLine.Add("state", "finishedSuccessfully")
+	s.storyLog.Add("state", "finishedSuccessfully")
 	s.logger.Printf("container '%v' finished successfully: %v, exit code=%d\n", containerID, runCmd, runCmd.ProcessState.ExitCode())
 	s.safeUpdateState(v1.ContainerState{Terminated: &v1.ContainerStateTerminated{
 		ExitCode:    int32(runCmd.ProcessState.ExitCode()),
@@ -351,31 +351,31 @@ func (s *VM) Run() {
 }
 
 func (s *VM) Cleanup() error {
-	defer s.logLine.Log()
+	defer s.storyLog.Log()
 
 	cleanupTimestamp := time.Now()
 	stopCtx, cancelStopCtx := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelStopCtx()
 
-	s.logLine.Add("action", "cleanup")
-	defer s.logLine.AddElapsedTimeSince("cleanup", cleanupTimestamp)
+	s.storyLog.Add("action", "cleanup")
+	defer s.storyLog.AddElapsedTimeSince("cleanup", cleanupTimestamp)
 
 	err := s.virt.Stop(stopCtx, int(s.containerPID.Load()))
 	if err == nil {
-		s.logLine.Add("stop", "ok")
+		s.storyLog.Add("stop", "ok")
 		s.logger.Printf("stopped VM gracefully")
 	} else {
-		s.logLine.Add("stop", err)
+		s.storyLog.Add("stop", err)
 		s.logger.Printf("failed to stop VM gracefully: %v", err)
 		p, err := os.FindProcess(int(s.containerPID.Load()))
 		if err != nil {
-			s.logLine.Add("noProcess", err)
+			s.storyLog.Add("noProcess", err)
 			return fmt.Errorf("could not find process %d: %v", s.containerPID.Load(), err)
 		}
 		defer p.Release()
 		err = p.Kill()
 		if err != nil && !errors.Is(err, os.ErrProcessDone) {
-			s.logLine.Add("killError", err)
+			s.storyLog.Add("killError", err)
 			return err
 		}
 	}
@@ -391,7 +391,7 @@ func (s *VM) Cleanup() error {
 		err2 := s.virt.Destroy(context.Background(), st.ContainerID)
 		if err2 != nil {
 			s.logger.Printf("failed to destroy container: %v", err2)
-			s.logLine.Add("cleanUpError", err2)
+			s.storyLog.Add("cleanUpError", err2)
 		}
 		return err2
 	}
