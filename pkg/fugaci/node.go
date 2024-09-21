@@ -13,7 +13,8 @@ import (
 )
 
 type Node struct {
-	name string
+	name         string
+	curieVersion string
 }
 
 func (s *Node) Name() string {
@@ -21,7 +22,7 @@ func (s *Node) Name() string {
 }
 
 // capacity returns the fake capacity of the node
-// TODO:
+// TODO(tjarosik):
 func (s *Node) capacity() v1.ResourceList {
 	return v1.ResourceList{
 		v1.ResourceCPU:    resource.MustParse("16"),   // 16 CPUs
@@ -61,7 +62,7 @@ func (s *Node) conditions() []v1.NodeCondition {
 }
 
 // nodeAddresses returns the fake node addresses
-// TODO:
+// TODO(tjarosik):
 func (s *Node) addresses() []v1.NodeAddress {
 	return []v1.NodeAddress{
 		{
@@ -183,12 +184,13 @@ func addSysctlInfo(sysctlMap map[string]string) map[string]string {
 }
 
 func (s *Node) Configure(node *corev1.Node) {
-
 	node.Spec.Taints = append(node.Spec.Taints, v1.Taint{
 		Key:    "fugaci.jarosik.online",
 		Value:  "true",
 		Effect: v1.TaintEffectNoSchedule,
 	})
+	// TODO(tjarosik): node.Status.NodeInfo.KubeletVersion = "" fugaci version
+	node.Status.NodeInfo.ContainerRuntimeVersion = s.curieVersion
 	node.Status.Capacity = s.capacity()
 	node.Status.Allocatable = s.capacity()
 	node.Status.Conditions = s.conditions()
@@ -210,7 +212,16 @@ func (s *Node) Configure(node *corev1.Node) {
 }
 
 func NewNode(cfg Config) Node {
+	out, err := exec.Command(cfg.CurieBinaryPath, "version").CombinedOutput()
+	var curieVersion string
+	if err != nil {
+		curieVersion = err.Error()
+	} else {
+		curieVersion = strings.TrimSpace(string(out))
+	}
+
 	return Node{
-		name: cfg.NodeName,
+		name:         cfg.NodeName,
+		curieVersion: curieVersion,
 	}
 }
