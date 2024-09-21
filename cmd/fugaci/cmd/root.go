@@ -35,6 +35,7 @@ func InitializeCommands() *cobra.Command {
 		NewCmdServe(),
 		NewCmdDaemon(),
 		NewCmdSettings(),
+		NewCmdVersion(),
 	)
 
 	return rootCmd
