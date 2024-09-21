@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -144,7 +145,7 @@ func TestVirtualization_Stop_whenProcessIsHanging_mustBeKilledAfterGracePeriod(t
 	scriptContent := `#!/bin/bash
 		cleanup() {
 			echo "Received Interrupt signal, exiting..."
-			exit 78
+			exit 75
 		}
 		trap cleanup SIGTERM
 		sleep 10
@@ -155,19 +156,30 @@ func TestVirtualization_Stop_whenProcessIsHanging_mustBeKilledAfterGracePeriod(t
 	defer removeTestScript(scriptPath)
 
 	v := NewVirtualization(scriptPath, "/tmp/data/dir/path")
-	cmd, err := v.Start(context.Background(), "container123")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	cmd, err := v.Start(ctx, "container123")
 	assert.NoError(t, err)
 
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		err := cmd.Wait()
-		assert.NoError(t, err)
+		assert.ErrorContains(t, err, "signal: killed")
 	}()
 	time.Sleep(100 * time.Millisecond)
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	defer cancel()
-	err = v.Stop(ctx, cmd.Process.Pid)
+
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
+	defer stopCancel()
+
+	err = v.Stop(stopCtx, cmd.Process.Pid)
 	assert.Equal(t, err, errors.New("process still did not exit after 1s"))
 	assert.Nil(t, cmd.ProcessState)
+	cancel()
+	wg.Wait()
 }
 
 func TestVirtualization_Stop_mustReactToSIGTERM_andStopGracefully(t *testing.T) {
