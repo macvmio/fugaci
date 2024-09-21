@@ -13,8 +13,9 @@ import (
 )
 
 type Node struct {
-	name         string
-	curieVersion string
+	name                string
+	curieVersion        string
+	kubeletEndpointPort int32
 }
 
 func (s *Node) Name() string {
@@ -80,7 +81,7 @@ func (s *Node) addresses() []v1.NodeAddress {
 func (s *Node) daemonEndpoints() v1.NodeDaemonEndpoints {
 	return v1.NodeDaemonEndpoints{
 		KubeletEndpoint: v1.DaemonEndpoint{
-			Port: 10250,
+			Port: s.kubeletEndpointPort,
 		},
 	}
 }
@@ -221,7 +222,8 @@ func NewNode(cfg Config) Node {
 	}
 
 	return Node{
-		name:         cfg.NodeName,
-		curieVersion: curieVersion,
+		name:                cfg.NodeName,
+		curieVersion:        curieVersion,
+		kubeletEndpointPort: cfg.KubeletEndpointPort,
 	}
 }

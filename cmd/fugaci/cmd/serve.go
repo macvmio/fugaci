@@ -71,6 +71,10 @@ func NewCmdServe() *cobra.Command {
 				configureRoutes,
 				nodeutil.WithClient(k8sClient),
 				nodeutil.WithTLSConfig(nodeutil.WithKeyPairFromPath(cfg.TLS.CertPath, cfg.TLS.KeyPath), withNoClientCertFunc),
+				func(c *nodeutil.NodeConfig) error {
+					c.HTTPListenAddr = fmt.Sprintf(":%d", cfg.KubeletEndpointPort)
+					return nil
+				},
 			)
 			if err != nil {
 				log.G(ctx).Fatal(err)
