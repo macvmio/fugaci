@@ -21,7 +21,7 @@ jobs:
         id: run-goreleaser
         with:
           version: "~> v1.19"
-          args: release --rm-dist
+          args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Generate subject
