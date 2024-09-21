@@ -1,7 +1,5 @@
 #!/bin/bash -e
 
-kubectl delete csr virtual-kubelet-csr || true
-
 # Ensure running in the directory containing the cfssl configuration
 cd "$(dirname "$0")"
 
@@ -15,14 +13,18 @@ if [ -z "$NODE_NAME" ] || [ -z "$IP_ADDRESS" ]; then
   exit 1
 fi
 
+
+
 # Variables
 PROFILE="kubelet"  # Name of the profile to use in CSR generation
 CONFIG_JSON="kubelet-csr.json"  # CSR configuration file
-CSR_NAME="virtual-kubelet-csr"
-KEY_FILE="virtual-kubelet-key.pem"
-CSR_FILE="virtual-kubelet.csr"
-CRT_FILE="virtual-kubelet.crt"
+CSR_NAME="${NODE_NAME}"
+KEY_FILE="${NODE_NAME}-key"
+CSR_FILE="${NODE_NAME}-csr"
+CRT_FILE="${NODE_NAME}-crt.pem"
 
+
+kubectl delete csr "${CSR_NAME}" || true
 # Step 1: Create a CSR configuration file
 
 # Step 1: Create a CSR configuration file
@@ -52,7 +54,7 @@ echo "CSR configuration file created at ${CONFIG_JSON} for Node: ${NODE_NAME}, I
 # Step 2: Generate the CSR and key
 cfssl genkey ${CONFIG_JSON} | cfssljson -bare ${CSR_NAME}
 
-# This generates files named `virtual-kubelet-csr-key.pem` (private key) and `virtual-kubelet-csr.csr` (CSR)
+# This generates files named `${NODE_NAME}.key.pem` (private key) and `${NODE_NAME}.csr.pem` (CSR)
 
 # Optional steps, applying the CSR to Kubernetes cluster, require kubectl
 # Assuming you have jq and kubectl installed, and your Kubernetes cluster is accessible
