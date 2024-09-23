@@ -32,6 +32,10 @@ func NewCmdServe() *cobra.Command {
 				fmt.Printf("Unable to decode into struct, %v", err)
 				return
 			}
+			if err := cfg.Validate(); err != nil {
+				fmt.Printf("Invalid config, %v", err)
+				return
+			}
 			fmt.Printf("Starting Fugaci provider with config: %+v\n", cfg)
 
 			logger := logrus.StandardLogger()
