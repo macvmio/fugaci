@@ -8,6 +8,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -22,13 +23,52 @@ func (s *Node) Name() string {
 	return s.name
 }
 
-// capacity returns the fake capacity of the node
-// TODO(tjarosik):
+func parseSysctlIntOutput(out string) (int, error) {
+	val := strings.TrimSpace(out)
+	return strconv.Atoi(val)
+}
+
+func parseSysctlUint64Output(out string) (uint64, error) {
+	val := strings.TrimSpace(out)
+	return strconv.ParseUint(val, 10, 64)
+}
+
+// getCPUCores gets the number of logical CPU cores on macOS
+func (s *Node) getCPUCores() (int, error) {
+	out, err := sysctlN("hw.logicalcpu")
+	if err != nil {
+		return 0, err
+	}
+	return parseSysctlIntOutput(out)
+}
+
+// getMemoryBytes gets the total system memory in bytes on macOS
+func (s *Node) getMemoryBytes() (uint64, error) {
+	out, err := sysctlN("hw.memsize")
+	if err != nil {
+		return 0, err
+	}
+	return parseSysctlUint64Output(out)
+}
+
 func (s *Node) capacity() v1.ResourceList {
+	cpuCount, err := s.getCPUCores()
+	if err != nil {
+		cpuCount = 8
+	}
+
+	memBytes, err := s.getMemoryBytes()
+	if err != nil {
+		memBytes = 16 * 1024 * 1024 * 1024
+	}
+
+	// Convert memory from bytes to a human-readable format for Kubernetes
+	memQuantity := resource.NewQuantity(int64(memBytes), resource.BinarySI)
+
 	return v1.ResourceList{
-		v1.ResourceCPU:    resource.MustParse("16"),   // 16 CPUs
-		v1.ResourceMemory: resource.MustParse("64Gi"), // 64 GB RAM
-		v1.ResourcePods:   resource.MustParse("2"),    // 2 Pods
+		v1.ResourceCPU:    *resource.NewQuantity(int64(cpuCount), resource.DecimalSI),
+		v1.ResourceMemory: *memQuantity,
+		v1.ResourcePods:   resource.MustParse("2"),
 	}
 }
 
