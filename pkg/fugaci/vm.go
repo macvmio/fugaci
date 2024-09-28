@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	regv1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/tomekjarosik/fugaci/pkg/sshrunner"
 	"github.com/tomekjarosik/fugaci/pkg/storylog"
 	v1 "k8s.io/api/core/v1"
@@ -20,7 +21,7 @@ import (
 const VmSshPort = 22
 
 type Puller interface {
-	Pull(ctx context.Context, image string, pullPolicy v1.PullPolicy, cb func(st v1.ContainerStateWaiting)) (imageID string, err error)
+	Pull(ctx context.Context, image string, pullPolicy v1.PullPolicy, cb func(st v1.ContainerStateWaiting)) (regv1.Hash, *regv1.Manifest, error)
 }
 
 type SSHRunner interface {
@@ -260,7 +261,7 @@ func (s *VM) Run() {
 	if len(s.GetContainerStatus().ContainerID) == 0 {
 		s.safeUpdateState(v1.ContainerState{Waiting: &v1.ContainerStateWaiting{Reason: "Pulling"}})
 		spec := s.GetContainerSpec()
-		imageID, err := s.puller.Pull(s.lifetimeCtx, spec.Image, spec.ImagePullPolicy, func(st v1.ContainerStateWaiting) {
+		imageID, _, err := s.puller.Pull(s.lifetimeCtx, spec.Image, spec.ImagePullPolicy, func(st v1.ContainerStateWaiting) {
 			s.safeUpdateState(v1.ContainerState{
 				Waiting: &st,
 			})
@@ -292,7 +293,7 @@ func (s *VM) Run() {
 		s.updateStatus(func(st *v1.ContainerStatus) {
 			st.ContainerID = containerID
 			st.Image = spec.Image
-			st.ImageID = imageID
+			st.ImageID = imageID.String()
 		})
 		s.safeUpdateState(v1.ContainerState{Waiting: &v1.ContainerStateWaiting{Reason: "Created"}})
 	} else {
