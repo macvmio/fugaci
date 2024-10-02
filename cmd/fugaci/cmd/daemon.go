@@ -100,59 +100,50 @@ func NewCmdDaemon() *cobra.Command {
 		},
 	}
 
-	var daemonInitCmd = &cobra.Command{
-		Use:   "init",
-		Short: "prepare .plist file",
-		Long:  ``,
-		Args:  cobra.ExactArgs(0),
+	var daemonBootstrapCmd = &cobra.Command{
+		Use:   "bootstrap",
+		Short: "Bootstraps a service into a domain",
 		Run: func(cmd *cobra.Command, args []string) {
 			plistLogDir := "/var/log/fugaci/"
 			plistArgs := []string{"serve"}
+
 			err := GeneratePlist("io.fugaci", plistLogDir, plistArgs, fugaciPlistPath)
 			if err != nil {
 				fmt.Printf("Error generating plist: %v\n", err)
+				return
+			}
+
+			fmt.Printf("Plist generated successfully at: %s\n", fugaciPlistPath)
+
+			// Bootstrap the service
+			out, err := exec.Command("launchctl", "bootstrap", "system", fugaciPlistPath).CombinedOutput()
+			if err != nil {
+				fmt.Printf("Error bootstrapping service: %s\n", err)
+				fmt.Printf("Output: %s\n", string(out))
 			} else {
-				fmt.Printf("Plist generated successfully at: %s\n", fugaciPlistPath)
+				fmt.Println("Service bootstrapped successfully")
 			}
 		},
 	}
 
-	var daemonStartCmd = &cobra.Command{
-		Use:   "start",
-		Short: "start a daemon",
-		Long:  ``,
-		Args:  cobra.ExactArgs(0),
+	var daemonBootoutCmd = &cobra.Command{
+		Use:   "bootout",
+		Short: "Tears down a service from a domain",
 		Run: func(cmd *cobra.Command, args []string) {
-			out, err := exec.Command("launchctl", "load", fugaciPlistPath).CombinedOutput()
+			// Bootout the service
+			out, err := exec.Command("launchctl", "bootout", "system", fugaciPlistPath).CombinedOutput()
 			if err != nil {
-				fmt.Printf("Error starting service: %s\n", err)
+				fmt.Printf("Error tearing down service: %s\n", err)
 				fmt.Printf("Output: %s\n", string(out))
 			} else {
-				fmt.Println("Service started successfully")
+				fmt.Println("Service booted out successfully")
 			}
 		},
 	}
 
-	var daemonStopCmd = &cobra.Command{
-		Use:   "stop",
-		Short: "stop a daemon",
-		Long:  ``,
-		Args:  cobra.ExactArgs(0),
-		Run: func(cmd *cobra.Command, args []string) {
-			// Command to stop the service
-			out, err := exec.Command("launchctl", "unload", fugaciPlistPath).CombinedOutput()
-			if err != nil {
-				fmt.Printf("Error stopping service: %s\n", err)
-				fmt.Printf("Output: %s\n", string(out))
-			} else {
-				fmt.Println("Service stopped successfully")
-			}
-		},
-	}
 	daemonCommand.AddCommand(
-		daemonInitCmd,
-		daemonStartCmd,
-		daemonStopCmd,
+		daemonBootstrapCmd,
+		daemonBootoutCmd,
 	)
 	return daemonCommand
 }
