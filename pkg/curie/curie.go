@@ -117,6 +117,7 @@ func (s *Virtualization) Destroy(ctx context.Context, containerID string) error 
 	cmd.Stdout = &stdout // Capture standard output
 	err := cmd.Run()
 	if err != nil {
+		log.Printf("error while calling cmd='%s', err=%v", cmd.String(), err)
 		if err2 := s.isKnownError(stdout.String()); errors.Is(err2, ErrNotExists) {
 			log.Printf("destroy container '%v': no longer exists", containerID)
 			return nil

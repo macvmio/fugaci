@@ -65,6 +65,7 @@ func (s *GeranosPuller) trackProgress(progressChan chan transporter.ProgressUpda
 func (s *GeranosPuller) Pull(ctx context.Context, image string, pullPolicy v1.PullPolicy, cb func(st v1.ContainerStateWaiting)) (regv1.Hash, *regv1.Manifest, error) {
 	opts := []transporter.Option{
 		transporter.WithContext(ctx),
+		transporter.WithImagesPath(s.imagesPath),
 	}
 	if pullPolicy != v1.PullNever {
 		if pullPolicy == v1.PullAlways {
@@ -80,9 +81,9 @@ func (s *GeranosPuller) Pull(ctx context.Context, image string, pullPolicy v1.Pu
 			return regv1.Hash{}, nil, fmt.Errorf("pull image: %w", err)
 		}
 	}
-	manifest, err := transporter.ReadManifest(image)
+	manifest, err := transporter.ReadManifest(image, opts...)
 	if err != nil {
-		return regv1.Hash{}, nil, fmt.Errorf("read image manigest: %w", err)
+		return regv1.Hash{}, nil, fmt.Errorf("read image manifest: %w", err)
 	}
 	digest, err := transporter.ReadDigest(image, opts...)
 	if err != nil {
