@@ -5,9 +5,9 @@ package fugaci
 
 import (
 	"context"
+	"github.com/macvmio/fugaci/pkg/curie"
+	"github.com/macvmio/fugaci/pkg/sshrunner"
 	"github.com/stretchr/testify/assert"
-	"github.com/tomekjarosik/fugaci/pkg/curie"
-	"github.com/tomekjarosik/fugaci/pkg/sshrunner"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"log"

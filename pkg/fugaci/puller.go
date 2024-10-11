@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	regv1 "github.com/google/go-containerregistry/pkg/v1"
-	"github.com/mobileinf/geranos/pkg/transporter"
+	"github.com/macvmio/geranos/pkg/transporter"
 	v1 "k8s.io/api/core/v1"
 	"log"
 )
@@ -81,13 +81,17 @@ func (s *GeranosPuller) Pull(ctx context.Context, image string, pullPolicy v1.Pu
 			return regv1.Hash{}, nil, fmt.Errorf("pull image: %w", err)
 		}
 	}
-	manifest, err := transporter.ReadManifest(image, opts...)
+	img, err := transporter.Read(image, opts...)
 	if err != nil {
 		return regv1.Hash{}, nil, fmt.Errorf("read image manifest: %w", err)
 	}
-	digest, err := transporter.ReadDigest(image, opts...)
+	manifest, err := img.Manifest()
 	if err != nil {
-		return regv1.Hash{}, nil, fmt.Errorf("read image digest: %w", err)
+		return regv1.Hash{}, nil, fmt.Errorf("read manifest: %w", err)
+	}
+	digest, err := img.Digest()
+	if err != nil {
+		return regv1.Hash{}, nil, fmt.Errorf("get digest: %w", err)
 	}
 	return digest, manifest, err
 }

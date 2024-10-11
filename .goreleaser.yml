@@ -17,7 +17,7 @@ builds:
     ldflags:
       - -s
       - -w
-      - -X github.com/tomekjarosik/fugaci/cmd/fugaci/cmd.Version={{.Version}}
+      - -X github.com/macvmio/fugaci/cmd/fugaci/cmd.Version={{.Version}}
     goarch:
       - arm64
     goos:

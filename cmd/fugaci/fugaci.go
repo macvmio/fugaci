@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/tomekjarosik/fugaci/cmd/fugaci/cmd"
+	"github.com/macvmio/fugaci/cmd/fugaci/cmd"
 )
 
 func main() {

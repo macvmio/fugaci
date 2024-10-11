@@ -8,7 +8,7 @@ import (
 )
 
 // Version can be set via:
-// -ldflags="-X 'github.com/tomekjarosik/fugaci/cmd/fugaci/cmd.Version=$TAG'"
+// -ldflags="-X 'github.com/macvmio/fugaci/cmd/fugaci/cmd.Version=$TAG'"
 var Version string
 
 func init() {
