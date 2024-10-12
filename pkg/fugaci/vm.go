@@ -21,7 +21,7 @@ import (
 const VmSshPort = 22
 
 type Puller interface {
-	Pull(ctx context.Context, image string, pullPolicy v1.PullPolicy, cb func(st v1.ContainerStateWaiting)) (regv1.Hash, *regv1.Manifest, error)
+	Pull(ctx context.Context, image string, pullPolicy v1.PullPolicy, cb func(st v1.ContainerStateWaiting)) (regv1.Image, error)
 }
 
 type SSHRunner interface {
@@ -261,20 +261,27 @@ func (s *VM) Run() {
 	if len(s.GetContainerStatus().ContainerID) == 0 {
 		s.safeUpdateState(v1.ContainerState{Waiting: &v1.ContainerStateWaiting{Reason: "Pulling"}})
 		spec := s.GetContainerSpec()
-		imageID, _, err := s.puller.Pull(s.lifetimeCtx, spec.Image, spec.ImagePullPolicy, func(st v1.ContainerStateWaiting) {
+		pulledImg, err := s.puller.Pull(s.lifetimeCtx, spec.Image, spec.ImagePullPolicy, func(st v1.ContainerStateWaiting) {
 			s.safeUpdateState(v1.ContainerState{
 				Waiting: &st,
 			})
 		})
 		s.storyLine.Add("action", "pulling")
 		s.storyLine.Add("spec.image", spec.Image)
-		s.storyLine.Add("imageID", imageID)
+
 		if err != nil {
 			s.storyLine.Add("err", err)
 			s.terminateWithError("unable to pull image", err)
 			return
 		}
 		s.storyLine.Add("pulling", "success")
+		imageID, err := pulledImg.Digest()
+		if err != nil {
+			s.storyLine.Add("err", err)
+			s.terminateWithError("unable to obtain image digest", err)
+			return
+		}
+		s.storyLine.Add("imageID", imageID)
 		s.storyLine.AddElapsedTimeSince("pulling", initTime)
 		s.logger.Printf("pulled image: %v (ID: %v)", spec.Image, imageID)
 

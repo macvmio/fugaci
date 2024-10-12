@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	regv1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/types"
 	"github.com/macvmio/fugaci/pkg/sshrunner"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -18,14 +19,78 @@ import (
 	"time"
 )
 
+// MockImage is a mock implementation of the v1.Image interface.
+type MockImage struct {
+	mockDigest regv1.Hash
+}
+
+// NewMockImage creates a new MockImage with the given digest.
+func NewMockImage(digestStr string) *MockImage {
+	d, err := regv1.NewHash(digestStr)
+	if err != nil {
+		panic(err)
+	}
+	return &MockImage{
+		mockDigest: d,
+	}
+}
+
+// Digest returns the mock digest that was set when the MockImage was created.
+func (m *MockImage) Digest() (regv1.Hash, error) {
+	return m.mockDigest, nil
+}
+
+// Below are other unimplemented methods of v1.Image.
+// You can add more if needed for your test cases.
+
+func (m *MockImage) MediaType() (types.MediaType, error) {
+	return "", nil
+}
+
+func (m *MockImage) ConfigName() (regv1.Hash, error) {
+	return regv1.Hash{}, nil
+}
+
+func (m *MockImage) RawConfigFile() ([]byte, error) {
+	return nil, nil
+}
+
+func (m *MockImage) ConfigFile() (*regv1.ConfigFile, error) {
+	return nil, nil
+}
+
+func (m *MockImage) LayerByDigest(d regv1.Hash) (regv1.Layer, error) {
+	return nil, nil
+}
+
+func (m *MockImage) Layers() ([]regv1.Layer, error) {
+	return nil, nil
+}
+
+func (m *MockImage) LayerByDiffID(h regv1.Hash) (regv1.Layer, error) {
+	return nil, nil
+}
+
+func (m *MockImage) RawManifest() ([]byte, error) {
+	return nil, nil
+}
+
+func (m *MockImage) Manifest() (*regv1.Manifest, error) {
+	return nil, nil
+}
+
+func (m *MockImage) Size() (int64, error) {
+	return 0, nil
+}
+
 // MockPuller is a mock of the Puller interface.
 type MockPuller struct {
 	mock.Mock
 }
 
-func (m *MockPuller) Pull(ctx context.Context, image string, pullPolicy v1.PullPolicy, cb func(st v1.ContainerStateWaiting)) (regv1.Hash, *regv1.Manifest, error) {
+func (m *MockPuller) Pull(ctx context.Context, image string, pullPolicy v1.PullPolicy, cb func(st v1.ContainerStateWaiting)) (regv1.Image, error) {
 	args := m.Called(ctx, image, pullPolicy)
-	return args.Get(0).(regv1.Hash), args.Get(1).(*regv1.Manifest), args.Error(2)
+	return args.Get(0).(regv1.Image), args.Error(1)
 }
 
 // MockVirtualization is a mock of the Virtualization interface.
@@ -81,11 +146,9 @@ func noPodOverride(pod *v1.Pod) {
 func setupCommonMockVirt(mockPuller *MockPuller, mockVirt *MockVirtualization, mockSSHRunner *MockSSHRunner, methods []string) {
 	if slices.Contains(methods, "Pull") {
 
-		h, _ := regv1.NewHash("sha256:123")
 		mockPuller.On("Pull", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
-			h,                      // Return a valid regv1.Hash
-			(*regv1.Manifest)(nil), // Return a nil Manifest
-			nil,                    // Return a nil error
+			NewMockImage("sha256:d2ac09ac29f0acbb2832ec160a5a27ac441050672baf12c3a189e2188560c72b"), // Return a mock image
+			nil, // Return a nil error
 		)
 	}
 	if slices.Contains(methods, "Create") {
@@ -148,8 +211,7 @@ func TestVM_Run_ErrorWhilePulling(t *testing.T) {
 	vm, _, mockPuller, _, cleanup := setupCommonTestVM(t, noPodOverride)
 	defer cleanup()
 
-	h, _ := regv1.NewHash("sha256:123")
-	mockPuller.On("Pull", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(h, (*regv1.Manifest)(nil), errors.New("invalid image"))
+	mockPuller.On("Pull", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return((*MockImage)(nil), errors.New("invalid image"))
 
 	go vm.Run()
 
@@ -496,7 +558,6 @@ func TestVM_Cleanup_CalledWhilePulling_mustExitQuickly(t *testing.T) {
 	vm, mockVirt, mockPuller, _, cleanup := setupCommonTestVM(t, noPodOverride)
 	defer cleanup()
 
-	h, _ := regv1.NewHash("sha256:123")
 	setupCommonMockVirt(mockPuller, mockVirt, nil, []string{"Stop"})
 	// Simulate a Pull function that blocks, waiting on the context
 	mockPuller.On("Pull", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
@@ -507,7 +568,7 @@ func TestVM_Cleanup_CalledWhilePulling_mustExitQuickly(t *testing.T) {
 		fmt.Printf("simulating that pull is waiting on context cancellation\n")
 		<-ctx.Done()
 		fmt.Printf("simulating that pull is waiting on context cancellation: finished\n")
-	}).Return(h, (*regv1.Manifest)(nil), errors.New("context cancelled"))
+	}).Return((*MockImage)(nil), errors.New("context cancelled"))
 
 	go vm.Run()
 	time.Sleep(20 * time.Millisecond)

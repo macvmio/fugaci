@@ -62,7 +62,7 @@ func (s *GeranosPuller) trackProgress(progressChan chan transporter.ProgressUpda
 }
 
 // Pull TODO(tjarosik): Add secrets for image pulling
-func (s *GeranosPuller) Pull(ctx context.Context, image string, pullPolicy v1.PullPolicy, cb func(st v1.ContainerStateWaiting)) (regv1.Hash, *regv1.Manifest, error) {
+func (s *GeranosPuller) Pull(ctx context.Context, image string, pullPolicy v1.PullPolicy, cb func(st v1.ContainerStateWaiting)) (regv1.Image, error) {
 	opts := []transporter.Option{
 		transporter.WithContext(ctx),
 		transporter.WithImagesPath(s.imagesPath),
@@ -78,20 +78,9 @@ func (s *GeranosPuller) Pull(ctx context.Context, image string, pullPolicy v1.Pu
 
 		err := transporter.Pull(image, opts...)
 		if err != nil {
-			return regv1.Hash{}, nil, fmt.Errorf("pull image: %w", err)
+			return nil, fmt.Errorf("pull image: %w", err)
 		}
 	}
-	img, err := transporter.Read(image, opts...)
-	if err != nil {
-		return regv1.Hash{}, nil, fmt.Errorf("read image manifest: %w", err)
-	}
-	manifest, err := img.Manifest()
-	if err != nil {
-		return regv1.Hash{}, nil, fmt.Errorf("read manifest: %w", err)
-	}
-	digest, err := img.Digest()
-	if err != nil {
-		return regv1.Hash{}, nil, fmt.Errorf("get digest: %w", err)
-	}
-	return digest, manifest, err
+	opts = append(opts, transporter.WithOmitLayersContent())
+	return transporter.Read(image, opts...)
 }
