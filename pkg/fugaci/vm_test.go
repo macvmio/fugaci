@@ -239,45 +239,19 @@ func TestVM_Run_StartContainerFailed_Crash(t *testing.T) {
 	mockVirt.AssertExpectations(t)
 }
 
-func TestVM_Run_Successful(t *testing.T) {
-	vm, mockVirt, mockPuller, _, cleanup := setupCommonTestVM(t, noPodOverride)
-	defer cleanup()
-
-	setupCommonMockVirt(mockPuller, mockVirt, nil, []string{"Pull"})
-	mockVirt.On("Create", mock.Anything, mock.Anything, mock.Anything).Return("containerid-456", nil)
-	cmd := exec.Command("/bin/bash")
-	cmd.Start()
-	mockVirt.On("Start", mock.Anything, "containerid-456").Return(cmd, nil)
-
-	go vm.Run()
-
-	<-vm.LifetimeContext().Done()
-
-	status := vm.Status()
-	require.NotNil(t, status.State.Terminated)
-	assert.Equal(t, int32(0), status.RestartCount)
-	assert.Equal(t, "containerid-456", status.ContainerID)
-	assert.Equal(t, int32(0), status.State.Terminated.ExitCode)
-	assert.Equal(t, "exit status 0", status.State.Terminated.Message)
-	assert.Equal(t, "exited successfully", status.State.Terminated.Reason)
-	assert.NotEmpty(t, status.State.Terminated.StartedAt)
-	assert.NotEmpty(t, status.State.Terminated.FinishedAt)
-
-	mockPuller.AssertExpectations(t)
-	mockVirt.AssertExpectations(t)
-}
-
 func TestVM_Run_Successful_ifContainerIDProvided_mustRestart(t *testing.T) {
-	vm, mockVirt, mockPuller, _, cleanup := setupCommonTestVM(t, func(pod *v1.Pod) {
+	vm, mockVirt, mockPuller, mockSSHRUnner, cleanup := setupCommonTestVM(t, func(pod *v1.Pod) {
 		pod.Status.ContainerStatuses = []v1.ContainerStatus{{
 			ContainerID: "containerid-123",
 		}}
 	})
 	defer cleanup()
 
-	cmd := exec.Command("/bin/bash")
+	setupCommonMockVirt(mockPuller, mockVirt, mockSSHRUnner, []string{"Start", "IP", "Run"})
+	cmd := exec.Command("/bin/sleep", "0.3")
 	cmd.Start()
 	mockVirt.On("Start", mock.Anything, "containerid-123").Return(cmd, nil)
+	mockVirt.On("Stop", mock.Anything, mock.Anything).Return(nil)
 
 	go vm.Run()
 
@@ -301,12 +275,11 @@ func TestVM_Run_Successful_ifContainerIDProvided_mustRestart(t *testing.T) {
 func TestVM_Run_Successful_mustBeReadyWithIPAddress(t *testing.T) {
 	vm, mockVirt, mockPuller, mockSSHRunner, cleanup := setupCommonTestVM(t, noPodOverride)
 	defer cleanup()
-	setupCommonMockVirt(mockPuller, mockVirt, mockSSHRunner, []string{"Pull", "IP", "Run"})
+	setupCommonMockVirt(mockPuller, mockVirt, mockSSHRunner, []string{"Pull", "IP", "Run", "Stop"})
 	mockVirt.On("Create", mock.Anything, mock.Anything, mock.Anything).Return("containerid-123", nil)
 	cmd := exec.Command("/bin/sleep", "0.3")
 	cmd.Start()
 	mockVirt.On("Start", mock.Anything, "containerid-123").Return(cmd, nil)
-
 	go vm.Run()
 
 	for {
@@ -342,10 +315,11 @@ func TestVM_Run_Successful_mustRunContainerCommandThroughSSH(t *testing.T) {
 	vm, mockVirt, mockPuller, mockSSHRunner, cleanup := setupCommonTestVM(t, noPodOverride)
 	defer cleanup()
 
-	setupCommonMockVirt(mockPuller, mockVirt, mockSSHRunner, []string{"Pull", "IP", "Run"})
+	setupCommonMockVirt(mockPuller, mockVirt, mockSSHRunner, []string{"Pull", "IP", "Run", "Stop"})
 	mockVirt.On("Create", mock.Anything, mock.Anything, mock.Anything).Return("containerid-123", nil)
 	cmd := exec.Command("/bin/sleep", "0.3")
-	cmd.Start()
+	err := cmd.Start()
+	require.NoError(t, err)
 	mockVirt.On("Start", mock.Anything, "containerid-123").Return(cmd, nil)
 
 	go vm.Run()

@@ -100,12 +100,13 @@ func (s *Virtualization) Stop(ctx context.Context, containerRunCmdPid int) error
 				// Probe the process to check if it's really alive
 				err := p.Signal(syscall.Signal(0))
 				_ = p.Release()
+				// NOTE: Process might be in defunct state here, so this needs to be handled at higher layers
 				if errors.Is(err, os.ErrProcessDone) {
 					log.Printf("process %d exited after %v\n", containerRunCmdPid, time.Since(start))
 					return nil
 				}
 			}
-			time.Sleep(25 * time.Millisecond)
+			time.Sleep(50 * time.Millisecond)
 		}
 	}
 }

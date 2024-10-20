@@ -96,6 +96,30 @@ func DialWithDeadline(network string, addr string, config *ssh.ClientConfig) (*s
 	return ssh.NewClient(c, chans, reqs), nil
 }
 
+func (s *Runner) handleSessionCancellation(ctx context.Context, session *ssh.Session, client *ssh.Client, done chan error, prefix, commandStr string) {
+	select {
+	case <-ctx.Done():
+		log.Printf("SSH session was requested to shutdown")
+		err := session.Signal(ssh.SIGTERM)
+		if err != nil {
+			log.Printf("failed to send SIGTERM to ssh session '%v': %v", prefix, err)
+		}
+		select {
+		case <-done:
+			log.Printf("%v: SSH session for command '%v' exited after SIGTERM", prefix, commandStr)
+		case <-time.After(2 * time.Second):
+			log.Printf("%v: SSH session for command '%v' did not exit after 5 seconds, closing client", prefix, commandStr)
+			err = client.Close()
+			if err != nil {
+				log.Printf("%v: failed to send close network client for '%v': %v", prefix, commandStr, err)
+			}
+		}
+
+	case <-done:
+		log.Printf("%v: SSH session for command '%v' finished", prefix, commandStr)
+	}
+}
+
 func (s *Runner) Run(ctx context.Context, dialInfo DialInfo, cmd []string, opts ...Option) error {
 	o := makeOptions(dialInfo, opts...)
 
@@ -112,19 +136,6 @@ func (s *Runner) Run(ctx context.Context, dialInfo DialInfo, cmd []string, opts 
 	}
 
 	commandStr := strings.Join(cmd, " ")
-
-	done := make(chan error, 1)
-	go func() {
-		select {
-		case <-ctx.Done():
-			err := client.Close()
-			if err != nil {
-				log.Printf("%v: failed to send close network client for '%v': %v", o.prefix, commandStr, err)
-			}
-		case <-done:
-			log.Printf("%v: SSH session for command '%v' finished", o.prefix, commandStr)
-		}
-	}()
 
 	// Create a session for running the command
 	session, err := client.NewSession()
@@ -146,6 +157,8 @@ func (s *Runner) Run(ctx context.Context, dialInfo DialInfo, cmd []string, opts 
 	if err != nil {
 		return fmt.Errorf("%v: failed to start SSH session '%v': %w", o.prefix, commandStr, err)
 	}
+	done := make(chan error, 1)
+	go s.handleSessionCancellation(ctx, session, client, done, o.prefix, commandStr)
 
 	err = session.Wait()
 	done <- err

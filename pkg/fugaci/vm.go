@@ -20,6 +20,9 @@ import (
 
 const VmSshPort = 22
 
+var ErrSSHNotReady = errors.New("ssh not ready")
+var ErrIPNotAssigned = errors.New("ip not assigned")
+
 type Puller interface {
 	Pull(ctx context.Context, image string, pullPolicy v1.PullPolicy, cb func(st v1.ContainerStateWaiting)) (regv1.Image, error)
 }
@@ -52,8 +55,11 @@ type VM struct {
 	pod            *v1.Pod
 	containerIndex *atomic.Int32
 
-	lifetimeCtx context.Context
-	cancelFunc  context.CancelCauseFunc
+	vmLifetimeCtx context.Context
+	vmCancelFunc  context.CancelCauseFunc
+
+	cmdLifetimeCtx context.Context
+	cmdCancelFunc  context.CancelCauseFunc
 
 	mu           sync.Mutex
 	wg           sync.WaitGroup
@@ -116,8 +122,10 @@ func NewVM(ctx context.Context, virt Virtualization, puller Puller, sshRunner SS
 		pod:            pod,
 		containerIndex: &aContainerIndex,
 
-		lifetimeCtx: lifetimeCtx,
-		cancelFunc:  cancelFunc,
+		vmLifetimeCtx:  lifetimeCtx,
+		vmCancelFunc:   cancelFunc,
+		cmdLifetimeCtx: nil,
+		cmdCancelFunc:  nil,
 		sshDialInfo: sshrunner.DialInfo{
 			Address:  "notset",
 			Username: username,
@@ -130,7 +138,7 @@ func NewVM(ctx context.Context, virt Virtualization, puller Puller, sshRunner SS
 }
 
 func (s *VM) LifetimeContext() context.Context {
-	return s.lifetimeCtx
+	return s.vmLifetimeCtx
 }
 
 func (s *VM) terminateWithError(reason string, err error) {
@@ -155,7 +163,7 @@ func (s *VM) terminateWithError(reason string, err error) {
 	s.safeUpdatePod(func(pod *v1.Pod) {
 		pod.Status.Phase = v1.PodFailed
 	})
-	s.cancelFunc(fmt.Errorf("terminated because of '%s': %s", reason, err.Error()))
+	s.vmCancelFunc(fmt.Errorf("terminated because of '%s': %s", reason, err.Error()))
 }
 
 func (s *VM) updateStatus(updateFunc func(s *v1.ContainerStatus)) {
@@ -189,8 +197,7 @@ func (s *VM) safeUpdatePodIP(ip net.IP) {
 	s.sshDialInfo.Address = fmt.Sprintf("%s:%d", ip, VmSshPort)
 }
 
-func (s *VM) waitAndRunCommandInside(ctx context.Context, startedAt time.Time, containerID string) {
-
+func (s *VM) waitAndRunCommandInside(ctx context.Context, startedAt time.Time, containerID string) error {
 	waitCtx, waitForIpCancelFunc := context.WithTimeout(ctx, 60*time.Second)
 	defer waitForIpCancelFunc()
 	ip := s.waitForIP(waitCtx, containerID)
@@ -199,7 +206,7 @@ func (s *VM) waitAndRunCommandInside(ctx context.Context, startedAt time.Time, c
 	defer s.logger.Printf("waitAndRunCommandInside has finished")
 
 	if ip == nil {
-		return
+		return ErrIPNotAssigned
 	}
 	s.safeUpdatePodIP(ip)
 
@@ -225,10 +232,10 @@ func (s *VM) waitAndRunCommandInside(ctx context.Context, startedAt time.Time, c
 	}
 	// tried too many times and there is still error
 	if err != nil {
-		s.storyLine.Add("state", "sshNotReady")
-		s.storyLine.AddElapsedTimeSince("sshNotReady", startedAt)
+		s.storyLine.Add("state", "SSHNotReady")
+		s.storyLine.AddElapsedTimeSince("SSHNotReady", startedAt)
 		s.logger.Printf("failed to establish SSH session")
-		return
+		return ErrSSHNotReady
 	}
 	s.updateStatus(func(st *v1.ContainerStatus) {
 		st.Ready = true
@@ -237,13 +244,14 @@ func (s *VM) waitAndRunCommandInside(ctx context.Context, startedAt time.Time, c
 	})
 	s.logger.Printf("successfully established SSH session")
 	command := s.GetCommand()
-	s.storyLine.Add("command", command)
+	s.storyLine.Add("container_command", command)
 	err = s.RunCommand(ctx, command, sshrunner.WithEnv(s.GetEnvVars()))
 	if err != nil {
-		s.storyLine.Add("containerCommandErr", err)
+		s.storyLine.Add("container_command_run_err", err)
 		s.logger.Printf("command '%v' finished with error: %v", s.GetCommand(), err)
 	}
-	s.storyLine.AddElapsedTimeSince("commandFinished", startedAt)
+	s.storyLine.AddElapsedTimeSince("container_command_finished", startedAt)
+	return nil
 }
 
 func (s *VM) Run() {
@@ -261,7 +269,7 @@ func (s *VM) Run() {
 	if len(s.GetContainerStatus().ContainerID) == 0 {
 		s.safeUpdateState(v1.ContainerState{Waiting: &v1.ContainerStateWaiting{Reason: "Pulling"}})
 		spec := s.GetContainerSpec()
-		pulledImg, err := s.puller.Pull(s.lifetimeCtx, spec.Image, spec.ImagePullPolicy, func(st v1.ContainerStateWaiting) {
+		pulledImg, err := s.puller.Pull(s.vmLifetimeCtx, spec.Image, spec.ImagePullPolicy, func(st v1.ContainerStateWaiting) {
 			s.safeUpdateState(v1.ContainerState{
 				Waiting: &st,
 			})
@@ -287,7 +295,7 @@ func (s *VM) Run() {
 
 		s.safeUpdateState(v1.ContainerState{Waiting: &v1.ContainerStateWaiting{Reason: "Pulled"}})
 
-		containerID, err := s.virt.Create(s.lifetimeCtx, *s.pod.DeepCopy(), 0)
+		containerID, err := s.virt.Create(s.vmLifetimeCtx, *s.pod.DeepCopy(), 0)
 		if err != nil {
 			s.terminateWithError("failed to create container", err)
 			return
@@ -311,9 +319,9 @@ func (s *VM) Run() {
 	}
 	s.safeUpdateState(v1.ContainerState{Waiting: &v1.ContainerStateWaiting{Reason: "starting"}})
 	containerID := s.GetContainerStatus().ContainerID
-	runCmd, err := s.virt.Start(s.lifetimeCtx, containerID)
+	runCmd, err := s.virt.Start(s.vmLifetimeCtx, containerID)
 	if err != nil {
-		err2 := s.virt.Destroy(s.lifetimeCtx, containerID)
+		err2 := s.virt.Destroy(s.vmLifetimeCtx, containerID)
 		if err2 != nil {
 			s.logger.Printf("failed to destroy container: %v", err2)
 		}
@@ -327,22 +335,33 @@ func (s *VM) Run() {
 	s.storyLine.AddElapsedTimeSince("started", initTime)
 	s.containerPID.Store(int64(runCmd.Process.Pid))
 
+	s.cmdLifetimeCtx, s.cmdCancelFunc = context.WithCancelCause(s.vmLifetimeCtx)
+	err = s.waitAndRunCommandInside(s.cmdLifetimeCtx, startedAt.Time, containerID)
+
+	s.storyLine.Add("action", "stop")
 	s.wg.Add(1)
-	go func(startedAt time.Time, cID string) {
+	// This needs to be done on separate thread, because otherwise will result in defunct process,
+	//and Stop() method will keep running
+	go func(startedTime time.Time) {
 		defer s.wg.Done()
-		s.waitAndRunCommandInside(s.lifetimeCtx, startedAt, cID)
-		s.logger.Printf("goroutine finished running command inside container")
-	}(startedAt.Time, containerID)
+		err2 := s.virt.Stop(s.vmLifetimeCtx, int(s.containerPID.Load()))
+		if err2 != nil {
+			s.logger.Printf("failed to stop container '%v': %v", containerID, err2)
+			s.storyLine.Add("err", err)
+		}
+		s.storyLine.AddElapsedTimeSince("command_stopped", startedTime)
+	}(startedAt.Time)
 
 	err = runCmd.Wait()
-	if err != nil {
-		s.storyLine.Add("runCmdErr", err)
+	s.storyLine.Add("container_exitcode", runCmd.ProcessState.ExitCode())
+	s.storyLine.Add("container_process_state", runCmd.ProcessState)
+	if err != nil && runCmd.ProcessState.ExitCode() != 0 {
+		s.storyLine.Add("container_exit_err", err)
 		s.logger.Printf("ProcessState at exit: %v, code=%d", runCmd.ProcessState.String(), runCmd.ProcessState.ExitCode())
 		s.terminateWithError("error from runCmd.Wait()", fmt.Errorf("'%s' command failed: %w", runCmd, err))
 		return
 	}
 
-	s.storyLine.Add("state", "finishedSuccessfully")
 	s.logger.Printf("container '%v' finished successfully: %v, exit code=%d\n", containerID, runCmd, runCmd.ProcessState.ExitCode())
 	s.safeUpdateState(v1.ContainerState{Terminated: &v1.ContainerStateTerminated{
 		ExitCode:    int32(runCmd.ProcessState.ExitCode()),
@@ -355,18 +374,25 @@ func (s *VM) Run() {
 	s.safeUpdatePod(func(pod *v1.Pod) {
 		pod.Status.Phase = v1.PodSucceeded
 	})
-	s.cancelFunc(nil)
+	s.vmCancelFunc(nil)
 }
 
 func (s *VM) Cleanup() error {
-	defer s.logger.Println(s.storyLine.String())
+	defer func() {
+		s.logger.Println(s.storyLine.String())
+	}()
 
 	cleanupTimestamp := time.Now()
-	stopCtx, cancelStopCtx := context.WithTimeout(context.Background(), 5*time.Second)
+	stopCtx, cancelStopCtx := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancelStopCtx()
 
 	s.storyLine.Add("action", "cleanup")
 	defer s.storyLine.AddElapsedTimeSince("cleanup", cleanupTimestamp)
+
+	if s.cmdCancelFunc != nil {
+		s.cmdCancelFunc(nil)
+		s.cmdCancelFunc = nil
+	}
 
 	err := s.virt.Stop(stopCtx, int(s.containerPID.Load()))
 	if err == nil {
@@ -388,7 +414,7 @@ func (s *VM) Cleanup() error {
 		}
 	}
 
-	s.cancelFunc(errors.New("aborted by user"))
+	s.vmCancelFunc(errors.New("aborted by user"))
 	s.logger.Printf("waiting for vm.Run() to complete its operations")
 	s.wg.Wait()
 
