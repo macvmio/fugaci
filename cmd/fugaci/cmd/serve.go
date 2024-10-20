@@ -58,7 +58,7 @@ func NewCmdServe() *cobra.Command {
 				if err != nil {
 					return nil, nil, err
 				}
-				p.ConfigureNode(cmd.Context(), pConfig.Node)
+				p.ConfigureNode(cmd.Context(), Version, pConfig.Node)
 				return p, node.NewNaiveNodeProvider(), nil
 			}
 			configureRoutes := func(cfg *nodeutil.NodeConfig) error {

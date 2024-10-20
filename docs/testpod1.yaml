@@ -18,7 +18,7 @@ spec:
   nodeSelector:
     kubernetes.io/os: darwin
   tolerations:
-    - key: "fugaci.jarosik.online"
+    - key: "fugaci.macvm.io"
       operator: "Equal"
       value: "true"
       effect: "NoSchedule"

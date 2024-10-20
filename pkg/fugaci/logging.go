@@ -86,8 +86,8 @@ func (lp *LoggingProvider) GetPods(ctx context.Context) ([]*v1.Pod, error) {
 	return pods, err
 }
 
-func (lp *LoggingProvider) ConfigureNode(ctx context.Context, node *v1.Node) {
-	lp.UnderlyingProvider.ConfigureNode(ctx, node)
+func (lp *LoggingProvider) ConfigureNode(ctx context.Context, fugaciVersion string, node *v1.Node) {
+	lp.UnderlyingProvider.ConfigureNode(ctx, fugaciVersion, node)
 	log.Printf("ConfigureNode called: %#v", node)
 }
 

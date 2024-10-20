@@ -15,6 +15,7 @@ import (
 
 type Node struct {
 	name                string
+	fugaciVersion       string
 	curieVersion        string
 	kubeletEndpointPort int32
 }
@@ -103,7 +104,7 @@ func (s *Node) conditions() []v1.NodeCondition {
 }
 
 // nodeAddresses returns the fake node addresses
-// TODO(tjarosik):
+// TODO(tjarosik): pass node address from config
 func (s *Node) addresses() []v1.NodeAddress {
 	return []v1.NodeAddress{
 		{
@@ -226,11 +227,11 @@ func addSysctlInfo(sysctlMap map[string]string) map[string]string {
 
 func (s *Node) Configure(node *corev1.Node) {
 	node.Spec.Taints = append(node.Spec.Taints, v1.Taint{
-		Key:    "fugaci.jarosik.online",
+		Key:    "fugaci.macvm.io",
 		Value:  "true",
 		Effect: v1.TaintEffectNoSchedule,
 	})
-	// TODO(tjarosik): node.Status.NodeInfo.KubeletVersion = "" fugaci version
+	node.Status.NodeInfo.KubeletVersion = s.fugaciVersion
 	node.Status.NodeInfo.ContainerRuntimeVersion = s.curieVersion
 	node.Status.Capacity = s.capacity()
 	node.Status.Allocatable = s.capacity()
@@ -252,7 +253,7 @@ func (s *Node) Configure(node *corev1.Node) {
 	addSysctlInfo(node.ObjectMeta.Annotations)
 }
 
-func NewNode(cfg Config) Node {
+func NewNode(fugaciVersion string, cfg Config) Node {
 	out, err := exec.Command(cfg.CurieBinaryPath, "version").CombinedOutput()
 	var curieVersion string
 	if err != nil {
@@ -263,6 +264,7 @@ func NewNode(cfg Config) Node {
 
 	return Node{
 		name:                cfg.NodeName,
+		fugaciVersion:       fugaciVersion,
 		curieVersion:        curieVersion,
 		kubeletEndpointPort: cfg.KubeletEndpointPort,
 	}

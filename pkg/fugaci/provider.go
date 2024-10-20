@@ -187,12 +187,12 @@ func (s *Provider) GetPods(ctx context.Context) ([]*v1.Pod, error) {
 	return []*v1.Pod{}, nil
 }
 
-func (s *Provider) ConfigureNode(ctx context.Context, node *v1.Node) {
-	n := NewNode(s.cfg)
+func (s *Provider) ConfigureNode(ctx context.Context, fugaciVersion string, node *v1.Node) {
+	n := NewNode(fugaciVersion, s.cfg)
 	n.Configure(node)
 }
 
-// TODO:
+// TODO(tjarosik):
 //func (s *Provider) NotifyPods(ctx context.Context, cb func(*v1.Pod)) {
 //	log.Printf("Notifying pods on node %s", s.nodeName)
 //}
