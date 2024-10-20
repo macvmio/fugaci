@@ -125,7 +125,7 @@ func NewVM(ctx context.Context, virt Virtualization, puller Puller, sshRunner SS
 		},
 		env:       envVars,
 		logger:    customLogger,
-		storyLine: storyline.New(customLogger),
+		storyLine: storyline.New(),
 	}, nil
 }
 
@@ -359,7 +359,7 @@ func (s *VM) Run() {
 }
 
 func (s *VM) Cleanup() error {
-	defer s.storyLine.Log()
+	defer s.logger.Println(s.storyLine.String())
 
 	cleanupTimestamp := time.Now()
 	stopCtx, cancelStopCtx := context.WithTimeout(context.Background(), 5*time.Second)

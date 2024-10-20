@@ -12,17 +12,15 @@ type Logger interface {
 }
 
 type StoryLine struct {
-	parts  []string
-	mu     sync.Mutex // To ensure thread-safety if used in concurrent environments
-	logger Logger     // Custom logger
+	parts []string
+	mu    sync.Mutex // To ensure thread-safety if used in concurrent environments
 }
 
 // New initializes and returns a new StoryLine instance with a custom logger
-func New(logger Logger) *StoryLine {
+func New() *StoryLine {
 
 	return &StoryLine{
-		parts:  make([]string, 0, 10), // Initial capacity to avoid frequent allocations
-		logger: logger,
+		parts: make([]string, 0, 10), // Initial capacity to avoid frequent allocations
 	}
 }
 
@@ -42,14 +40,6 @@ func (l *StoryLine) Add(key string, value interface{}) {
 
 	// Append the key=value pair to parts
 	l.parts = append(l.parts, key+"="+strValue)
-}
-
-// Log prints the log line as a single entry
-func (l *StoryLine) Log() {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	l.logger.Println(strings.Join(l.parts, ", "))
 }
 
 // Clear clears the log line to reuse the instance
@@ -75,4 +65,18 @@ func (l *StoryLine) AddElapsedTimeSince(key string, startTime time.Time) {
 
 	elapsed := time.Since(startTime)
 	l.parts = append(l.parts, fmt.Sprintf("%s_ms=%d", key, elapsed.Milliseconds()))
+}
+
+func (l *StoryLine) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return strings.Join(l.parts, ", ")
+}
+
+func (l *StoryLine) Parts() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return l.parts
 }
