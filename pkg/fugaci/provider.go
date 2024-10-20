@@ -199,8 +199,12 @@ func (s *Provider) ConfigureNode(ctx context.Context, node *v1.Node) {
 
 func (s *Provider) GetContainerLogs(ctx context.Context, namespace, podName, containerName string, opts api.ContainerLogOpts) (io.ReadCloser, error) {
 	// Return a simple static log line
-	l := "TODO: Log entry from container " + containerName + " in pod " + namespace + "/" + podName + "\n"
-	return io.NopCloser(strings.NewReader(l)), nil
+	vm, err := s.findVMByNames(namespace, podName, containerName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find VM for pod %s/%s: %w", namespace, podName, err)
+	}
+
+	return io.NopCloser(strings.NewReader(strings.Join(vm.storyLine.Parts(), "\n"))), nil
 }
 
 func (s *Provider) RunInContainer(ctx context.Context, namespace, podName, containerName string, cmd []string, attach api.AttachIO) error {
@@ -214,8 +218,7 @@ func (s *Provider) RunInContainer(ctx context.Context, namespace, podName, conta
 }
 
 func (s *Provider) AttachToContainer(ctx context.Context, namespace, podName, containerName string, attach api.AttachIO) error {
-	//TODO implement me
-	panic("implement me")
+	return ErrNotImplemented
 }
 
 func (s *Provider) GetStatsSummary(ctx context.Context) (*statsv1alpha1.Summary, error) {
