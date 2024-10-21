@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"crypto/tls"
 	"flag"
 	"fmt"
 	"github.com/macvmio/fugaci/pkg/fugaci"
@@ -68,15 +67,13 @@ func NewCmdServe() *cobra.Command {
 				cfg.Handler = mux
 				return nodeutil.AttachProviderRoutes(mux)(cfg)
 			}
-			withNoClientCertFunc := func(config *tls.Config) error {
-				config.ClientAuth = tls.NoClientCert
-				return nil
-			}
 			vkNode, err := nodeutil.NewNode(cfg.NodeName,
 				providerFunc,
 				configureRoutes,
 				nodeutil.WithClient(k8sClient),
-				nodeutil.WithTLSConfig(nodeutil.WithKeyPairFromPath(cfg.TLS.CertPath, cfg.TLS.KeyPath), withNoClientCertFunc),
+				nodeutil.WithTLSConfig(
+					nodeutil.WithKeyPairFromPath(cfg.TLS.CertPath, cfg.TLS.KeyPath),
+					nodeutil.WithCAFromPath(cfg.TLS.CertificateAuthorityPath)),
 				func(c *nodeutil.NodeConfig) error {
 					c.HTTPListenAddr = fmt.Sprintf(":%d", cfg.KubeletEndpointPort)
 					return nil

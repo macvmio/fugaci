@@ -1,0 +1,13 @@
+nodeName: mac-m1
+kubeConfigPath: /Users/tomek/.kube/config
+curieVirtualization:
+  binaryPath: /usr/local/bin/curie
+  dataRootPath: /Users/tomek/.curie
+internalIP: 192.168.1.99
+
+TLS:
+  # This can be generated with Kubernetes CSR
+  keyPath: /Users/tomek/.fugaci/mac-m1.key
+  certPath: /Users/tomek/.fugaci/mac-m1.crt
+  # This could be taken from .kube/config's certificate-authority-data
+  certificateAuthorityPath: /Users/tomek/.kube/ca.pem
