@@ -54,7 +54,7 @@ type VM struct {
 	puller         Puller
 	sshRunner      SSHRunner
 	pod            *v1.Pod
-	containerIndex *atomic.Int32
+	containerIndex atomic.Int32
 
 	vmLifetimeCtx context.Context
 	vmCancelFunc  context.CancelCauseFunc
@@ -97,17 +97,13 @@ func NewVM(ctx context.Context, virt Virtualization, puller Puller, sshRunner SS
 	if err != nil {
 		return nil, fmt.Errorf("failed to extract ssh env vars: %w", err)
 	}
-	var aContainerIndex atomic.Int32
-	aContainerIndex.Store(int32(containerIndex)) // Safely initialize atomic.Int64 from int
 
-	return &VM{
+	vm := &VM{
 		virt:      virt,
 		puller:    puller,
 		sshRunner: sshRunner,
 
 		pod:            pod,
-		containerIndex: &aContainerIndex,
-
 		vmLifetimeCtx:  lifetimeCtx,
 		vmCancelFunc:   cancelFunc,
 		cmdLifetimeCtx: nil,
@@ -120,7 +116,9 @@ func NewVM(ctx context.Context, virt Virtualization, puller Puller, sshRunner SS
 		env:       envVars,
 		logger:    customLogger,
 		storyLine: storyline.New(),
-	}, nil
+	}
+	vm.containerIndex.Store(int32(containerIndex))
+	return vm, nil
 }
 func extractSSHEnvVars(container v1.Container) (envVars []v1.EnvVar, username, password string, err error) {
 	for _, envVar := range container.Env {
