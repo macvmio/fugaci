@@ -8,17 +8,25 @@ import (
 )
 
 type Config struct {
-	NodeName            string `yaml:"nodeName"`
-	KubeConfigPath      string `yaml:"kubeConfigPath"`
-	LogLevel            string `yaml:"logLevel"`
-	CurieBinaryPath     string `yaml:"curieBinaryPath"`
-	CurieDataRootPath   string `yaml:"curieDataRootPath"`
-	KubeletEndpointPort int32  `yaml:"kubeletEndpointPort"`
+	NodeName            string `mapstructure:"nodeName"`
+	KubeConfigPath      string `mapstructure:"kubeConfigPath"`
+	LogLevel            string `mapstructure:"logLevel"`
+	CurieVirtualization struct {
+		BinaryPath   string `mapstructure:"binaryPath"`
+		DataRootPath string `mapstructure:"dataRootPath"`
+	} `mapstructure:"curieVirtualization"`
+
+	KubeletEndpointPort int32 `mapstructure:"kubeletEndpointPort"`
+	// Needs to be reachable by Kubernetes control plane
+	internalIP string `mapstructure:"internalIP"`
 
 	TLS struct {
-		KeyPath  string `yaml:"keyPath"`
-		CertPath string `yaml:"certPath"`
-	} `yaml:"tls"`
+		KeyPath  string `mapstructure:"keyPath"`
+		CertPath string `mapstructure:"certPath"`
+		// This is CA you can obtain from decoded .kube/config's certificate-authority-data
+		// TODO(tjarosik): automatically extract that
+		CertificateAuthorityPath string `mapstructure:"certificateAuthorityPath"`
+	} `mapstructure:"tls"`
 }
 
 func (c *Config) Validate() error {
@@ -28,8 +36,8 @@ func (c *Config) Validate() error {
 	// Validate the paths
 	paths := map[string]string{
 		"KubeConfigPath":    c.KubeConfigPath,
-		"CurieBinaryPath":   c.CurieBinaryPath,
-		"CurieDataRootPath": c.CurieDataRootPath,
+		"CurieBinaryPath":   c.CurieVirtualization.BinaryPath,
+		"CurieDataRootPath": c.CurieVirtualization.DataRootPath,
 		"TLS.KeyPath":       c.TLS.KeyPath,
 		"TLS.CertPath":      c.TLS.CertPath,
 	}

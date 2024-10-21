@@ -6,6 +6,9 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"log"
+	"net"
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -15,6 +18,7 @@ import (
 
 type Node struct {
 	name                string
+	internalIP          net.IP
 	fugaciVersion       string
 	curieVersion        string
 	kubeletEndpointPort int32
@@ -103,19 +107,32 @@ func (s *Node) conditions() []v1.NodeCondition {
 	}
 }
 
-// nodeAddresses returns the fake node addresses
-// TODO(tjarosik): pass node address from config
-func (s *Node) addresses() []v1.NodeAddress {
+func (s *Node) addresses() ([]v1.NodeAddress, error) {
+	if s.internalIP == nil {
+		ip, err := getInternalIP()
+		if err != nil {
+			return nil, err
+		}
+		s.internalIP = ip
+	}
+	if s.internalIP == nil {
+		return nil, fmt.Errorf("no internal IP found nor provided")
+	}
+
+	hostname, err := os.Hostname()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get hostname: %v", err)
+	}
 	return []v1.NodeAddress{
 		{
 			Type:    v1.NodeInternalIP,
-			Address: "192.168.1.99",
+			Address: s.internalIP.String(),
 		},
 		{
 			Type:    v1.NodeHostName,
-			Address: "fugaci-node",
+			Address: hostname,
 		},
-	}
+	}, nil
 }
 
 // nodeDaemonEndpoints returns the fake daemon endpoints
@@ -225,7 +242,7 @@ func addSysctlInfo(sysctlMap map[string]string) map[string]string {
 	return sysctlMap
 }
 
-func (s *Node) Configure(node *corev1.Node) {
+func (s *Node) Configure(node *corev1.Node) error {
 	node.Spec.Taints = append(node.Spec.Taints, v1.Taint{
 		Key:    "fugaci.macvm.io",
 		Value:  "true",
@@ -236,7 +253,11 @@ func (s *Node) Configure(node *corev1.Node) {
 	node.Status.Capacity = s.capacity()
 	node.Status.Allocatable = s.capacity()
 	node.Status.Conditions = s.conditions()
-	node.Status.Addresses = s.addresses()
+	addresses, err := s.addresses()
+	if err != nil {
+		return err
+	}
+	node.Status.Addresses = addresses
 	node.Status.DaemonEndpoints = s.daemonEndpoints()
 	node.Status.NodeInfo.OperatingSystem = s.OperatingSystem()
 	node.Status.NodeInfo.OSImage = s.GetOSImage()
@@ -251,10 +272,51 @@ func (s *Node) Configure(node *corev1.Node) {
 		node.ObjectMeta.Annotations = map[string]string{}
 	}
 	addSysctlInfo(node.ObjectMeta.Annotations)
+	log.Printf("%#v", node)
+	return nil
+}
+
+// getInternalIP retrieves the first non-loopback IP address
+func getInternalIP() (net.IP, error) {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, iface := range interfaces {
+		// Ignore down interfaces and loopback interfaces
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+
+		addrs, err := iface.Addrs()
+		if err != nil {
+			return nil, err
+		}
+
+		for _, addr := range addrs {
+			var ip net.IP
+
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+
+			// Ignore loopback addresses and check for IPv4 addresses
+			if ip == nil || ip.IsLoopback() || ip.To4() == nil {
+				continue
+			}
+
+			return ip, nil
+		}
+	}
+	return nil, fmt.Errorf("no internal IP found")
 }
 
 func NewNode(fugaciVersion string, cfg Config) Node {
-	out, err := exec.Command(cfg.CurieBinaryPath, "version").CombinedOutput()
+	out, err := exec.Command(cfg.CurieVirtualization.BinaryPath, "version").CombinedOutput()
 	var curieVersion string
 	if err != nil {
 		curieVersion = err.Error()

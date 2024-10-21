@@ -86,9 +86,10 @@ func (lp *LoggingProvider) GetPods(ctx context.Context) ([]*v1.Pod, error) {
 	return pods, err
 }
 
-func (lp *LoggingProvider) ConfigureNode(ctx context.Context, fugaciVersion string, node *v1.Node) {
-	lp.UnderlyingProvider.ConfigureNode(ctx, fugaciVersion, node)
+func (lp *LoggingProvider) ConfigureNode(ctx context.Context, fugaciVersion string, node *v1.Node) error {
 	log.Printf("ConfigureNode called: %#v", node)
+
+	return lp.UnderlyingProvider.ConfigureNode(ctx, fugaciVersion, node)
 }
 
 func (lp *LoggingProvider) GetContainerLogs(ctx context.Context, namespace, podName, containerName string, opts api.ContainerLogOpts) (io.ReadCloser, error) {

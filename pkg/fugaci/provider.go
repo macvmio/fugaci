@@ -42,8 +42,8 @@ type Provider struct {
 func NewProvider(appCtx context.Context, cfg Config) (*LoggingProvider, error) {
 	return NewLoggingProvider(&Provider{
 		appContext: appCtx,
-		puller:     NewGeranosPuller(path.Join(cfg.CurieDataRootPath, "images")),
-		virt:       curie.NewVirtualization(cfg.CurieBinaryPath, cfg.CurieDataRootPath),
+		puller:     NewGeranosPuller(path.Join(cfg.CurieVirtualization.DataRootPath, "images")),
+		virt:       curie.NewVirtualization(cfg.CurieVirtualization.BinaryPath, cfg.CurieVirtualization.DataRootPath),
 		cfg:        cfg,
 		vms:        [2]*VM{},
 	}), nil
@@ -187,9 +187,9 @@ func (s *Provider) GetPods(ctx context.Context) ([]*v1.Pod, error) {
 	return []*v1.Pod{}, nil
 }
 
-func (s *Provider) ConfigureNode(ctx context.Context, fugaciVersion string, node *v1.Node) {
+func (s *Provider) ConfigureNode(ctx context.Context, fugaciVersion string, node *v1.Node) error {
 	n := NewNode(fugaciVersion, s.cfg)
-	n.Configure(node)
+	return n.Configure(node)
 }
 
 // TODO(tjarosik):
