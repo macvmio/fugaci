@@ -122,12 +122,13 @@ func NewVM(ctx context.Context, virt Virtualization, puller Puller, sshRunner SS
 }
 func extractSSHEnvVars(container v1.Container) (envVars []v1.EnvVar, username, password string, err error) {
 	for _, envVar := range container.Env {
-		envVars = append(envVars, envVar)
 		switch envVar.Name {
 		case SshUsernameEnvVar:
 			username = envVar.Value
 		case SshPasswordEnvVar:
 			password = envVar.Value
+		default:
+			envVars = append(envVars, envVar)
 		}
 	}
 	if username == "" {
