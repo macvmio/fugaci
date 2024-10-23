@@ -314,7 +314,7 @@ func (s *VM) pullContainerImage(spec v1.Container, initTime time.Time) (imageID 
 	if err != nil {
 		return "", "unable to obtain image digest", err
 	}
-	s.storyLine.Add("imageID", imageID)
+	s.storyLine.Add("imageID", hashImageID)
 	s.storyLine.AddElapsedTimeSince("pulling", initTime)
 	s.logger.Printf("pulled image: %v (ID: %v)", spec.Image, hashImageID)
 
