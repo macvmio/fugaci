@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: testpod4
+spec:
+  containers:
+    - image: ghcr.io/macvmio/macos-sonoma:14.5-agent-v1.6
+      imagePullPolicy: Never
+      command: [ "sleep", "10000000" ]
+      name: curie3
+      env:
+        - name: KUBERNETES_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: KUBERNETES_POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: KUBERNETES_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName  # This field points to the NodeName
+        - name: FUGACI_TESTKEY
+          value: some-test-value
+      envFrom:
+        - secretRef:
+            name: fugaci-ssh-secret
+  nodeSelector:
+    kubernetes.io/os: darwin
+  tolerations:
+    - key: "fugaci.macvm.io"
+      operator: "Equal"
+      value: "true"
+      effect: "NoSchedule"

@@ -8,13 +8,6 @@ spec:
       imagePullPolicy: Always
       command: [ "test123" ]
       name: nanoserver
-      readinessProbe:
-        exec:
-          command:
-            - sw_vers
-        initialDelaySeconds: 10
-        periodSeconds: 10
-  restartPolicy: OnFailure
   nodeSelector:
     kubernetes.io/os: darwin
   tolerations:

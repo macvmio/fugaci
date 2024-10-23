@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: testpod2
+spec:
+  containers:
+    - image: ghcr.com/invalid/image:123
+      imagePullPolicy: IfNotPresent
+      command: [ "sleep", "1000000" ]
+      name: curie3
+      envFrom:
+        - secretRef:
+            name: fugaci-ssh-secret
+  nodeSelector:
+    kubernetes.io/os: darwin
+  tolerations:
+    - key: "fugaci.macvm.io"
+      operator: "Equal"
+      value: "true"
+      effect: "NoSchedule"
