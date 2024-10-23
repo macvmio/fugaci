@@ -1,3 +1,6 @@
+//go:build e2e
+// +build e2e
+
 package fugaci_test
 
 /*
@@ -56,10 +59,6 @@ func TestProviderE2E(t *testing.T) {
 			podFiles:   []string{"pod1-basic-running.yaml"},
 			timeout:    15 * time.Second,
 			postCreate: waitForPodPhaseRunning,
-			assertions: func(t *testing.T, clientset *kubernetes.Clientset, config *rest.Config, pods []*v1.Pod) {
-				p := pods[0]
-				require.Equal(t, v1.PodRunning, p.Status.Phase)
-			},
 		},
 		{
 			name:       "TestPodWithInvalidImage_MustBeInFailedPhase",
@@ -136,8 +135,14 @@ func TestProviderE2E(t *testing.T) {
 				assert.Empty(t, stderr, "Stderr should be empty")
 			},
 		},
+		//{
+		//	// TODO: Figure out a way to delete test image
+		//	name:       "TestPodPullStrategy_Always",
+		//	podFiles:   []string{"pod5-pull-strategy-always.yaml"},
+		//	timeout:    300 * time.Second,
+		//	postCreate: waitForPodConditionReady,
+		//},
 		// TODO: Test all 3 pulling strategies
-		// TODO: Test invalid image
 		// Add more test cases here
 	}
 
@@ -181,16 +186,13 @@ func runPodTest(t *testing.T, clientset *kubernetes.Clientset, config *rest.Conf
 		}
 	}()
 
-	valueOrDefault := func(a, b time.Duration) time.Duration {
-		if 0 != a {
-			return a
-		}
-		return b
+	timeout := tc.timeout
+	if timeout == 0 {
+		timeout = 30 * time.Second
 	}
 
 	for _, pod := range pods {
-		// TODO: Make it configurable per test? e.g. waitForRead, waitForFinished, waitForRunning
-		if err := tc.postCreate(clientset, pod.Namespace, pod.Name, valueOrDefault(tc.timeout, 30*time.Second)); err != nil {
+		if err := tc.postCreate(clientset, pod.Namespace, pod.Name, timeout); err != nil {
 			t.Fatalf("Pod %s did not reach Ready state: %v", pod.Name, err)
 		}
 	}
