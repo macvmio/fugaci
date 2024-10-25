@@ -4,6 +4,15 @@ Fugaci is a Kubernetes-based system for serving ephemeral macOS virtual machines
 
 [![Watch the video](https://img.youtube.com/vi/DbzaP82zl7c/maxresdefault.jpg)](https://www.youtube.com/watch?v=DbzaP82zl7c)
 
+## A Building Block for macOS workflows
+
+Fugaci is designed as a foundational building block rather than a complete out-of-the-box solution.
+Just as Kubernetes provides a platform for orchestrating containers upon which complex systems are built,
+Fugaci offers the missing piece for managing ephemeral macOS virtual machines within Kubernetes. 
+This allows developers and system architects to build customized workflows and higher-level solutions
+tailored to their specific macOS deployment needs.
+
+
 ## Status
 
 **Experimental**: Fugaci is currently experimental and not recommended for production use. However, it has been successfully used to run thousands of VMs over multiple days with continuous integration systems.
@@ -115,7 +124,8 @@ spec:
 
 ## License
 
-Fugaci is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for details.
+Fugaci is licensed under the Apache License 2.0, allowing you to use, modify, and distribute the software.
+See the LICENSE file for more details.
 
 ## Credits
 
