@@ -24,8 +24,6 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-const testNamespace = "jenkins"
-
 type PodTestCase struct {
 	name       string
 	podFiles   []string

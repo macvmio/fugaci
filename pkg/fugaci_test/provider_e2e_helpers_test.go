@@ -23,6 +23,8 @@ import (
 	"time"
 )
 
+const testNamespace = "jenkins"
+
 func createPodFromYAML(clientset *kubernetes.Clientset, fileName string) (*v1.Pod, error) {
 	podYAML, err := os.ReadFile(filepath.Join("testdata", fileName))
 	if err != nil {
