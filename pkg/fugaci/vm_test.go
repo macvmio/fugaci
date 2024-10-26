@@ -324,24 +324,29 @@ func TestVM_Run_Successful_mustRunContainerCommandThroughSSH(t *testing.T) {
 
 	go vm.Run()
 
+	var statusJustAfterReady v1.ContainerStatus
+	var podJustAfterReady v1.Pod
 	for {
 		status := vm.Status()
 		if !status.Ready {
 			time.Sleep(5 * time.Millisecond)
 			continue
 		}
-		assert.True(t, status.Ready)
-		assert.True(t, *status.Started)
-		assert.Equal(t, "1.2.3.4", vm.GetPod().Status.PodIP)
-		assert.Equal(t, v1.PodRunning, vm.GetPod().Status.Phase)
-		lastCall := mockSSHRunner.Calls[len(mockSSHRunner.Calls)-1]
-		assert.Equal(t, "Run", lastCall.Method)
-		assert.Equal(t, sshrunner.DialInfo{Address: "1.2.3.4:22", Username: "testuser", Password: "testpassword"}, lastCall.Arguments.Get(1)) // SSH address
-		assert.Equal(t, []string{"sh", "-c", "test"}, lastCall.Arguments.Get(2))                                                              // Command
+		statusJustAfterReady = status // Command
+		podJustAfterReady = *vm.GetPod()
 		break
 	}
 
 	<-vm.LifetimeContext().Done()
+
+	assert.True(t, statusJustAfterReady.Ready)
+	assert.True(t, *statusJustAfterReady.Started)
+	assert.Equal(t, "1.2.3.4", podJustAfterReady.Status.PodIP)
+	assert.Equal(t, v1.PodRunning, podJustAfterReady.Status.Phase)
+	lastCall := mockSSHRunner.Calls[len(mockSSHRunner.Calls)-1]
+	assert.Equal(t, "Run", lastCall.Method)
+	assert.Equal(t, sshrunner.DialInfo{Address: "1.2.3.4:22", Username: "testuser", Password: "testpassword"}, lastCall.Arguments.Get(1)) // SSH address
+	assert.Equal(t, []string{"sh", "-c", "test"}, lastCall.Arguments.Get(2))
 
 	status := vm.Status()
 	require.NotNil(t, status.State.Terminated)

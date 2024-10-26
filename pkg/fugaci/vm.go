@@ -78,6 +78,7 @@ func NewVM(ctx context.Context, virt Virtualization, puller Puller, sshRunner SS
 		return nil, errors.New("invalid container index")
 	}
 	lifetimeCtx, cancelFunc := context.WithCancelCause(ctx)
+	cmdLifetimeCtx, cmdCancelFunc := context.WithCancelCause(lifetimeCtx)
 	if pod.Status.ContainerStatuses == nil {
 		pod.Status.ContainerStatuses = make([]v1.ContainerStatus, len(pod.Spec.Containers))
 	}
@@ -106,8 +107,8 @@ func NewVM(ctx context.Context, virt Virtualization, puller Puller, sshRunner SS
 		pod:            pod,
 		vmLifetimeCtx:  lifetimeCtx,
 		vmCancelFunc:   cancelFunc,
-		cmdLifetimeCtx: nil,
-		cmdCancelFunc:  nil,
+		cmdLifetimeCtx: cmdLifetimeCtx,
+		cmdCancelFunc:  cmdCancelFunc,
 		sshDialInfo: sshrunner.DialInfo{
 			Address:  "notset",
 			Username: username,
@@ -343,7 +344,6 @@ func (s *VM) Run() {
 		return
 	}
 
-	s.cmdLifetimeCtx, s.cmdCancelFunc = context.WithCancelCause(s.vmLifetimeCtx)
 	err = s.waitAndRunCommandInside(s.cmdLifetimeCtx, startedAt.Time, containerID)
 
 	s.wg.Add(1)
@@ -423,10 +423,7 @@ func (s *VM) Cleanup() error {
 	s.storyLine.Add("action", "cleanup")
 	defer s.storyLine.AddElapsedTimeSince("cleanup", cleanupTimestamp)
 
-	if s.cmdCancelFunc != nil {
-		s.cmdCancelFunc(nil)
-		s.cmdCancelFunc = nil
-	}
+	s.cmdCancelFunc(nil)
 
 	err := s.virt.Stop(stopCtx, int(s.containerPID.Load()))
 	if err == nil {

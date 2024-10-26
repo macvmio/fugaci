@@ -87,7 +87,6 @@ func NewCmdServe() *cobra.Command {
 			if err != nil {
 				log.G(ctx).Fatal(err)
 			}
-			return
 		},
 	}
 
