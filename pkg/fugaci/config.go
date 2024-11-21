@@ -18,7 +18,7 @@ type Config struct {
 
 	KubeletEndpointPort int32 `mapstructure:"kubeletEndpointPort"`
 	// Needs to be reachable by Kubernetes control plane
-	internalIP string `mapstructure:"internalIP"`
+	InternalIP string `mapstructure:"internalIP"`
 
 	TLS struct {
 		KeyPath  string `mapstructure:"keyPath"`

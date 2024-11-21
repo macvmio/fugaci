@@ -109,6 +109,7 @@ func (s *Node) conditions() []v1.NodeCondition {
 
 func (s *Node) addresses() ([]v1.NodeAddress, error) {
 	if s.internalIP == nil {
+		log.Printf("internalIP not specified, guessing from available interfaces")
 		ip, err := getInternalIP()
 		if err != nil {
 			return nil, err
@@ -326,6 +327,7 @@ func NewNode(fugaciVersion string, cfg Config) Node {
 
 	return Node{
 		name:                cfg.NodeName,
+		internalIP:          net.ParseIP(cfg.InternalIP),
 		fugaciVersion:       fugaciVersion,
 		curieVersion:        curieVersion,
 		kubeletEndpointPort: cfg.KubeletEndpointPort,

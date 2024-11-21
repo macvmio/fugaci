@@ -1,6 +1,5 @@
 #!/bin/bash -e
 
-# Ensure running in the directory containing the cfssl configuration
 cd "$(dirname "$0")"
 
 # Input Parameters
@@ -77,15 +76,38 @@ spec:
   - server auth
 EOF
 
-
-
 # Step 5: Approve the CSR in Kubernetes
 kubectl certificate approve ${CSR_NAME}
 
-# Step 6: Retrieve the signed certificate
-kubectl get csr ${CSR_NAME} -o jsonpath='{.status.certificate}' | base64 --decode > ${CRT_FILE}
+# Wait for the certificate to be issued
+echo "Waiting for certificate to be issued..."
+for i in {1..15}; do
+  CERT=$(kubectl get csr "${CSR_NAME}" -o jsonpath='{.status.certificate}')
+  if [[ -n "${CERT}" ]]; then
+    echo "Certificate has been issued."
+    break
+  fi
+  echo "Waiting for TLS certificates to be issued"
+  sleep 1
+done
 
- kubectl get csr ${CSR_NAME} -o yaml
+if [[ -z "${CERT}" ]]; then
+  echo "Error: Certificate was not issued for CSR ${CSR_NAME}."
+  exit 1
+fi
+
+# Step 6: Retrieve the signed certificate
+echo "${CERT}" | base64 --decode > "${CRT_FILE}"
+
+# Verify that the certificate file was created
+if [[ ! -f "${CRT_FILE}" ]]; then
+  echo "Error: Certificate file ${CRT_FILE} was not created."
+  exit 1
+fi
+
+kubectl get csr ${CSR_NAME} -o yaml
+
+rm "${NODE_NAME}.csr"
 
 echo "Certificate signing request, key, and certificate (once approved) have been generated:"
 echo "CSR: ${CSR_FILE}"
