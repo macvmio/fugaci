@@ -5,7 +5,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/rsa"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"log"
@@ -13,7 +12,6 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"text/template"
 	"time"
@@ -63,9 +61,9 @@ func (p *Provisioner) Provision() {
 	fmt.Println("Starting environment setup...")
 	must("start docker compose", p.startDockerCompose())
 	must("process kubeconfig.yaml file", p.processKubeconfigFile())
-	must("generate TLS Certs for Mac Workstation", p.generateNodeTLSCerts())
-	must("extract Certificate Authority from kubeconfig.yaml", p.extractCertificateAuthorityData())
-	must("validate TLS certs are signed with CA", p.validateCertKeyPair())
+	must("generate server TLS Certs for Mac Workstation", p.generateNodeTLSCerts())
+	must("extract client (mTLS) Certificate Authority", p.extractClientCertificateAuthorityData())
+	must("validate TLS cert/key pair", p.validateCertKeyPair())
 	must("create Fugaci username/password secret in Kubernetes", p.createFugaciSSHSecret())
 	must("generate Fugaci node configuration content", p.generateFugaciConfigContent())
 	must("deploy files to Mac Workstation", p.deployFilesToMacWorkstation())
@@ -376,31 +374,30 @@ func (p *Provisioner) validateCertKeyPair() error {
 		return fmt.Errorf("unsupported public key type in certificate")
 	}
 
-	// Validate certificate against CA
-	caFile := p.LocalOutputs.CertificateAuthorityPath
-	caData, err := os.ReadFile(caFile)
-	if err != nil {
-		return fmt.Errorf("failed to read CA file: %v", err)
-	}
-	caBlock, _ := pem.Decode(caData)
-	if caBlock == nil || caBlock.Type != "CERTIFICATE" {
-		return fmt.Errorf("invalid CA file format: %s", caFile)
-	}
-	caCert, err := x509.ParseCertificate(caBlock.Bytes)
-	if err != nil {
-		return fmt.Errorf("failed to parse CA certificate: %v", err)
-	}
+	// Validate certificate against CA - NOTE: There could be different CAs for server TLS and client auth mTLS
+	//caFile := p.LocalOutputs.CertificateAuthorityPath
+	//caData, err := os.ReadFile(caFile)
+	//if err != nil {
+	//	return fmt.Errorf("failed to read CA file: %v", err)
+	//}
+	//caBlock, _ := pem.Decode(caData)
+	//if caBlock == nil || caBlock.Type != "CERTIFICATE" {
+	//	return fmt.Errorf("invalid CA file format: %s", caFile)
+	//}
+	//caCert, err := x509.ParseCertificate(caBlock.Bytes)
+	//if err != nil {
+	//	return fmt.Errorf("failed to parse CA certificate: %v", err)
+	//}
+	//
+	//roots := x509.NewCertPool()
+	//roots.AddCert(caCert)
+	//opts := x509.VerifyOptions{
+	//	Roots: roots,
+	//}
+	//if _, err := cert.Verify(opts); err != nil {
+	//	return fmt.Errorf("certificate is not signed by the specified CA: %v", err)
+	//}
 
-	roots := x509.NewCertPool()
-	roots.AddCert(caCert)
-	opts := x509.VerifyOptions{
-		Roots: roots,
-	}
-	if _, err := cert.Verify(opts); err != nil {
-		return fmt.Errorf("certificate is not signed by the specified CA: %v", err)
-	}
-
-	fmt.Printf("Validation successful: %s and %s are a matching pair, signed by %s\n", crtFile, keyFile, caFile)
 	return nil
 }
 
@@ -420,31 +417,17 @@ func (p *Provisioner) generateNodeTLSCerts() error {
 	return nil
 }
 
-func (p *Provisioner) extractCertificateAuthorityData() error {
-	content, err := os.ReadFile(p.LocalOutputs.KubeconfigDestinationPath)
+func (p *Provisioner) extractClientCertificateAuthorityData() error {
+	cmd := exec.Command("docker", "compose", "cp",
+		fmt.Sprintf("%s:%s", p.LocalInputs.K3SAgentContainer.Name, p.LocalInputs.K3SAgentContainer.ClientCAPath),
+		p.LocalOutputs.CertificateAuthorityPath)
+	cmd.Dir = p.LocalInputs.DockerDirectoryPath
+
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed to read kubeconfig file: %v", err)
+		return fmt.Errorf("failed to fetch certificate using '%s': %v\nOutput: %s", cmd, err, string(output))
 	}
 
-	// Use a regular expression to extract certificate-authority-data
-	re := regexp.MustCompile(`certificate-authority-data:\s*([A-Za-z0-9+/=]+)`)
-	matches := re.FindStringSubmatch(string(content))
-	if len(matches) < 2 {
-		return fmt.Errorf("certificate-authority-data not found in kubeconfig")
-	}
-
-	// Decode the base64-encoded certificate data
-	decodedData, err := base64.StdEncoding.DecodeString(matches[1])
-	if err != nil {
-		return fmt.Errorf("failed to decode certificate-authority-data: %v", err)
-	}
-
-	// Save the decoded certificate data as a .pem file
-	err = os.WriteFile(p.LocalOutputs.CertificateAuthorityPath, decodedData, 0644)
-	if err != nil {
-		return fmt.Errorf("failed to write .pem file: %v", err)
-	}
-
-	fmt.Printf("Certificate saved to %s\n", p.LocalOutputs.CertificateAuthorityPath)
+	fmt.Printf("Certificate successfully fetched and saved to %s\n", p.LocalOutputs.CertificateAuthorityPath)
 	return nil
 }

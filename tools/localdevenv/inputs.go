@@ -42,6 +42,11 @@ type LocalInputs struct {
 
 	MacNodeName      string
 	MacNodeIPAddress string
+
+	K3SAgentContainer struct {
+		Name         string
+		ClientCAPath string
+	}
 }
 
 type RemoteInputs struct {
@@ -68,6 +73,13 @@ func NewLocalInputs() (*LocalInputs, error) {
 		ServerIPAddress:      os.Getenv(FugaciK3SServerIPAddressEnvVariable),
 		MacNodeName:          MacWorkstationNodeName,
 		MacNodeIPAddress:     os.Getenv(FugaciMacWorkstationIPAddressEnvVariable),
+		K3SAgentContainer: struct {
+			Name         string
+			ClientCAPath string
+		}{
+			Name:         "agent",
+			ClientCAPath: "/var/lib/rancher/k3s/agent/client-ca.crt",
+		},
 	}, nil
 }
 

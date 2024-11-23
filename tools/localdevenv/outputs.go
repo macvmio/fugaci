@@ -40,7 +40,7 @@ func NewRemoteOutputs(inputs RemoteInputs) (*RemoteOutputs, error) {
 		DevEnvDirPath:            devEnvPath,
 		TLSKeyPath:               filepath.Join(devEnvPath, fmt.Sprintf("%s-key.pem", inputs.SSHNodeName)),
 		TLSCertPath:              filepath.Join(devEnvPath, fmt.Sprintf("%s-crt.pem", inputs.SSHNodeName)),
-		CertificateAuthorityPath: filepath.Join(devEnvPath, "k3s-CA.pem"),
+		CertificateAuthorityPath: filepath.Join(devEnvPath, "k3s-client-CA.pem"),
 		KubeconfigPath:           filepath.Join(devEnvPath, "k3s.yaml"),
 		FugaciConfigPath:         filepath.Join(devEnvPath, "fugaci-config.yaml"),
 	}, nil
