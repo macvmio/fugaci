@@ -11,7 +11,7 @@ services:
 
   server:
     image: "rancher/k3s:${K3S_VERSION:-latest}"
-    command: server --tls-san "${FUGACI_K3S_SERVER_IP_ADDRESS:?err}"
+    command: server --tls-san "${FUGACI_K3S_SERVER_IP_ADDRESS:?err}" --disable traefik --disable-kube-proxy --egress-selector-mode disabled
     tmpfs:
       - /run
       - /var/run
@@ -32,8 +32,6 @@ services:
       - .:/output
     ports:
       - "16443:6443"   # Kubernetes API Server
-      - "10080:80"     # Ingress controller port 80
-      - "10443:443"    # Ingress controller port 443
 
   agent:
     image: "rancher/k3s:${K3S_VERSION:-latest}"
