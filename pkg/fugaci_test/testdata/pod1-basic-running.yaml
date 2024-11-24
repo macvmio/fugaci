@@ -4,7 +4,7 @@ metadata:
   name: testpod1
 spec:
   containers:
-    - image: ghcr.io/macvmio/macos-sonoma:14.5-agent-v1.6
+    - image: ghcr.io/macvmio/macos-sonoma:14.5-agent-v1.7
       imagePullPolicy: Never
       command: [ "sleep", "1000000" ]
       name: curie3

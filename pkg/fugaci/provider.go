@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/macvmio/fugaci/pkg/curie"
+	"github.com/macvmio/fugaci/pkg/portforwarder"
 	"github.com/macvmio/fugaci/pkg/sshrunner"
 	io_prometheus_client "github.com/prometheus/client_model/go"
 	"github.com/virtual-kubelet/node-cli/manager"
@@ -60,7 +61,9 @@ func (s *Provider) allocateVM(pod *v1.Pod) (*VM, error) {
 		if s.vms[i] != nil {
 			continue
 		}
-		vm, err := NewVM(s.appContext, s.virt, s.puller, sshrunner.NewRunner(), pod, 0)
+		vm, err := NewVM(s.appContext, s.virt, s.puller,
+			sshrunner.NewRunner(), portforwarder.NewPortForwarder(),
+			pod, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -217,6 +220,14 @@ func (s *Provider) RunInContainer(ctx context.Context, namespace, podName, conta
 	return vm.RunCommand(ctx, cmd, sshrunner.WithAttachIO(attach), sshrunner.WithEnv(vm.GetEnvVars()))
 }
 
+func (s *Provider) PortForward(ctx context.Context, namespace, podName string, port int32, stream io.ReadWriteCloser) error {
+	vm, err := s.findVMByNames(namespace, podName, "")
+	if err != nil {
+		return fmt.Errorf("failed to find VM for pod %s/%s: %w", namespace, podName, err)
+	}
+	return vm.PortForward(ctx, port, stream)
+}
+
 func (s *Provider) AttachToContainer(ctx context.Context, namespace, podName, containerName string, attach api.AttachIO) error {
 	return ErrNotImplemented
 }
@@ -227,8 +238,4 @@ func (s *Provider) GetStatsSummary(ctx context.Context) (*statsv1alpha1.Summary,
 
 func (s *Provider) GetMetricsResource(ctx context.Context) ([]*io_prometheus_client.MetricFamily, error) {
 	return nil, ErrNotImplemented
-}
-
-func (s *Provider) PortForward(ctx context.Context, namespace, pod string, port int32, stream io.ReadWriteCloser) error {
-	return ErrNotImplemented
 }

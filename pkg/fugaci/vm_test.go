@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"io"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"net"
@@ -75,6 +76,15 @@ func (m *MockSSHRunner) Run(ctx context.Context, dialInfo sshrunner.DialInfo, cm
 	return args.Error(0)
 }
 
+type MockPortForwarder struct {
+	mock.Mock
+}
+
+func (m *MockPortForwarder) PortForward(ctx context.Context, address string, stream io.ReadWriteCloser) error {
+	args := m.Called(ctx, address, stream)
+	return args.Error(0)
+}
+
 func noPodOverride(pod *v1.Pod) {
 }
 
@@ -108,6 +118,7 @@ func setupCommonTestVM(t *testing.T, podOverride func(*v1.Pod)) (*VM, *MockVirtu
 	mockPuller := new(MockPuller)
 	mockVirt := new(MockVirtualization)
 	mockSSHRunner := new(MockSSHRunner)
+	mockPortFortwarder := new(MockPortForwarder)
 
 	pod := &v1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -131,7 +142,7 @@ func setupCommonTestVM(t *testing.T, podOverride func(*v1.Pod)) (*VM, *MockVirtu
 	}
 	podOverride(pod)
 
-	vm, err := NewVM(context.Background(), mockVirt, mockPuller, mockSSHRunner, pod, 0)
+	vm, err := NewVM(context.Background(), mockVirt, mockPuller, mockSSHRunner, mockPortFortwarder, pod, 0)
 	require.NoError(t, err)
 	require.NotNil(t, vm)
 

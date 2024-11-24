@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -32,6 +33,10 @@ type SSHRunner interface {
 	Run(ctx context.Context, dialInfo sshrunner.DialInfo, cmd []string, opts ...sshrunner.Option) error
 }
 
+type PortForwarder interface {
+	PortForward(ctx context.Context, address string, stream io.ReadWriteCloser) error
+}
+
 type VirtualizationLifecycle interface {
 	Create(ctx context.Context, pod v1.Pod, containerIndex int) (containerID string, err error)
 	Start(ctx context.Context, containerID string) (runCommand *exec.Cmd, err error)
@@ -53,6 +58,7 @@ type VM struct {
 	virt           Virtualization
 	puller         Puller
 	sshRunner      SSHRunner
+	portForwarder  PortForwarder
 	pod            *v1.Pod
 	containerIndex atomic.Int32
 
@@ -73,7 +79,7 @@ type VM struct {
 	storyLine *storyline.StoryLine
 }
 
-func NewVM(ctx context.Context, virt Virtualization, puller Puller, sshRunner SSHRunner, pod *v1.Pod, containerIndex int) (*VM, error) {
+func NewVM(ctx context.Context, virt Virtualization, puller Puller, sshRunner SSHRunner, portForwarder PortForwarder, pod *v1.Pod, containerIndex int) (*VM, error) {
 	if containerIndex < 0 || containerIndex >= len(pod.Spec.Containers) {
 		return nil, errors.New("invalid container index")
 	}
@@ -100,9 +106,10 @@ func NewVM(ctx context.Context, virt Virtualization, puller Puller, sshRunner SS
 	}
 
 	vm := &VM{
-		virt:      virt,
-		puller:    puller,
-		sshRunner: sshRunner,
+		virt:          virt,
+		puller:        puller,
+		sshRunner:     sshRunner,
+		portForwarder: portForwarder,
 
 		pod:            pod,
 		vmLifetimeCtx:  lifetimeCtx,
@@ -496,6 +503,10 @@ func (s *VM) RunCommand(ctx context.Context, cmd []string, opts ...sshrunner.Opt
 	extOpts := make([]sshrunner.Option, 0)
 	extOpts = append(extOpts, opts...)
 	return s.sshRunner.Run(ctx, s.sshDialInfo, cmd, extOpts...)
+}
+
+func (s *VM) PortForward(ctx context.Context, port int32, stream io.ReadWriteCloser) error {
+	return s.portForwarder.PortForward(ctx, fmt.Sprintf("%s:%d", s.safeGetPod().Status.PodIP, port), stream)
 }
 
 // Below are functions which are safe to call in multiple goroutines
