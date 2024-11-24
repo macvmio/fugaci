@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 )
 
 func verify() bool {
@@ -14,15 +15,19 @@ func verify() bool {
 	checklist.addExecutableInstallationCheck("kubectl")
 	checklist.addExecutableInstallationCheck("cfssl")
 	checklist.addExecutableInstallationCheck("cfssljson")
+	checklist.addCheck("docker compose installed", checkDockerInstallation)
+
 	checklist.addCheck(fmt.Sprintf("SSH connectivity to '%s'", MacWorkstationNodeName),
 		checkSSHConnectivity(MacWorkstationNodeName))
 	checklist.addCheck(fmt.Sprintf("'curie' binary exists on '%s'", MacWorkstationNodeName),
 		checkBinaryExistsRemotely(MacWorkstationNodeName))
-	checklist.addCheck("docker compose installed", checkDockerInstallation)
 	checklist.addCheck(fmt.Sprintf("'%s' IP address matches env variable '%s'", MacWorkstationNodeName, FugaciMacWorkstationIPAddressEnvVariable),
 		func() error {
 			return checkIPAddressBehindSSHMatchesEnvVar(MacWorkstationNodeName, FugaciMacWorkstationIPAddressEnvVariable)
 		})
+	checklist.addCheck("Kubelet default port 10250 is reachable", func() error {
+		return checkPortReachable(os.Getenv(FugaciMacWorkstationIPAddressEnvVariable), "10250")
+	})
 	return checklist.verify()
 }
 

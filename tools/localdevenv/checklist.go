@@ -3,9 +3,11 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // Check Define a type for the checks
@@ -160,6 +162,19 @@ func checkIPAddressBehindSSHMatchesEnvVar(sshNodeName string, envVarName string)
 		return fmt.Errorf("%s (%s) does not match SSH '%s' IP (%s)",
 			envVarName, ipFromEnvVar, connectedIP, sshNodeName)
 	}
+
+	return nil
+}
+
+func checkPortReachable(ip string, port string) error {
+	address := net.JoinHostPort(ip, port)
+	timeout := 5 * time.Second
+	// Try to establish a TCP connection
+	conn, err := net.DialTimeout("tcp", address, timeout)
+	if err != nil {
+		return fmt.Errorf("port %s on %s is not reachable: %v", port, ip, err)
+	}
+	defer conn.Close()
 
 	return nil
 }
