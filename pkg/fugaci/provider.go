@@ -43,7 +43,7 @@ type Provider struct {
 func NewProvider(appCtx context.Context, cfg Config) (*LoggingProvider, error) {
 	return NewLoggingProvider(&Provider{
 		appContext: appCtx,
-		puller:     NewGeranosPuller(path.Join(cfg.CurieVirtualization.DataRootPath, "images")),
+		puller:     NewGeranosPuller(path.Join(cfg.CurieVirtualization.DataRootPath, ".images")),
 		virt:       curie.NewVirtualization(cfg.CurieVirtualization.BinaryPath, cfg.CurieVirtualization.DataRootPath),
 		cfg:        cfg,
 		vms:        [2]*VM{},
