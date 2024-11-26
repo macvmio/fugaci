@@ -11,6 +11,7 @@ type Config struct {
 	NodeName            string `mapstructure:"nodeName"`
 	KubeConfigPath      string `mapstructure:"kubeConfigPath"`
 	LogLevel            string `mapstructure:"logLevel"`
+	LogsDirectory       string `mapstructure:"logsDirectory"`
 	CurieVirtualization struct {
 		BinaryPath   string `mapstructure:"binaryPath"`
 		DataRootPath string `mapstructure:"dataRootPath"`
@@ -38,6 +39,7 @@ func (c *Config) Validate() error {
 		"KubeConfigPath":    c.KubeConfigPath,
 		"CurieBinaryPath":   c.CurieVirtualization.BinaryPath,
 		"CurieDataRootPath": c.CurieVirtualization.DataRootPath,
+		"LogsDirectory":     c.LogsDirectory,
 		"TLS.KeyPath":       c.TLS.KeyPath,
 		"TLS.CertPath":      c.TLS.CertPath,
 	}

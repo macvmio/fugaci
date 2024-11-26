@@ -63,6 +63,7 @@ func (s *Provider) allocateVM(pod *v1.Pod) (*VM, error) {
 		}
 		vm, err := NewVM(s.appContext, s.virt, s.puller,
 			sshrunner.NewRunner(), portforwarder.NewPortForwarder(),
+			s.cfg.LogsDirectory,
 			pod, 0)
 		if err != nil {
 			return nil, err
@@ -229,7 +230,11 @@ func (s *Provider) PortForward(ctx context.Context, namespace, podName string, p
 }
 
 func (s *Provider) AttachToContainer(ctx context.Context, namespace, podName, containerName string, attach api.AttachIO) error {
-	return ErrNotImplemented
+	vm, err := s.findVMByNames(namespace, podName, containerName)
+	if err != nil {
+		return fmt.Errorf("failed to find VM for pod %s/%s: %w", namespace, podName, err)
+	}
+	return vm.AttachToContainer(ctx, attach)
 }
 
 func (s *Provider) GetStatsSummary(ctx context.Context) (*statsv1alpha1.Summary, error) {

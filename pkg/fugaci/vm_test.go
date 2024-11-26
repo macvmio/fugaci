@@ -142,7 +142,7 @@ func setupCommonTestVM(t *testing.T, podOverride func(*v1.Pod)) (*VM, *MockVirtu
 	}
 	podOverride(pod)
 
-	vm, err := NewVM(context.Background(), mockVirt, mockPuller, mockSSHRunner, mockPortFortwarder, pod, 0)
+	vm, err := NewVM(context.Background(), mockVirt, mockPuller, mockSSHRunner, mockPortFortwarder, t.TempDir(), pod, 0)
 	require.NoError(t, err)
 	require.NotNil(t, vm)
 

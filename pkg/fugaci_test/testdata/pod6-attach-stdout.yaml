@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: testpod1
+spec:
+  containers:
+    - image: ghcr.io/macvmio/macos-sonoma:14.5-agent-v1.7
+      imagePullPolicy: Never
+      command: [ "bash", "-c", 'while true; do echo "Current time: $(date)"; sleep 0.1; done' ]
+      name: curie3
+      envFrom:
+        - secretRef:
+            name: fugaci-ssh-secret
+  nodeSelector:
+    kubernetes.io/os: darwin
+  tolerations:
+    - key: "fugaci.macvm.io"
+      operator: "Equal"
+      value: "true"
+      effect: "NoSchedule"

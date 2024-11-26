@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/macvmio/fugaci/pkg/streams"
+	"github.com/virtual-kubelet/virtual-kubelet/node/api"
 	"io"
 	"log"
 	"net"
@@ -75,11 +77,19 @@ type VM struct {
 	sshDialInfo sshrunner.DialInfo
 	env         []v1.EnvVar
 
+	streams   *streams.FilesBasedStreams
 	logger    *log.Logger
 	storyLine *storyline.StoryLine
 }
 
-func NewVM(ctx context.Context, virt Virtualization, puller Puller, sshRunner SSHRunner, portForwarder PortForwarder, pod *v1.Pod, containerIndex int) (*VM, error) {
+func NewVM(ctx context.Context,
+	virt Virtualization,
+	puller Puller,
+	sshRunner SSHRunner,
+	portForwarder PortForwarder,
+	containerLogsDirectory string,
+	pod *v1.Pod,
+	containerIndex int) (*VM, error) {
 	if containerIndex < 0 || containerIndex >= len(pod.Spec.Containers) {
 		return nil, errors.New("invalid container index")
 	}
@@ -105,6 +115,12 @@ func NewVM(ctx context.Context, virt Virtualization, puller Puller, sshRunner SS
 		return nil, fmt.Errorf("failed to extract ssh env vars: %w", err)
 	}
 
+	fileStreams, err := streams.NewFilesBasedStreams(containerLogsDirectory,
+		fmt.Sprintf("%s_%s_%s", pod.Namespace, pod.Name, cst.Name))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temporary files based streams: %w", err)
+	}
+
 	vm := &VM{
 		virt:          virt,
 		puller:        puller,
@@ -122,6 +138,7 @@ func NewVM(ctx context.Context, virt Virtualization, puller Puller, sshRunner SS
 			Password: password,
 		},
 		env:       envVars,
+		streams:   fileStreams,
 		logger:    customLogger,
 		storyLine: storyline.New(),
 	}
@@ -237,7 +254,8 @@ func (s *VM) waitAndRunCommandInside(ctx context.Context, startedAt time.Time, c
 	s.logger.Printf("successfully established SSH session")
 	command := s.GetCommand()
 	s.storyLine.Add("container_command", command)
-	err = s.RunCommand(ctx, command, sshrunner.WithEnv(s.GetEnvVars()))
+
+	err = s.RunCommand(ctx, command, sshrunner.WithEnv(s.GetEnvVars()), sshrunner.WithAttachIO(s.streams))
 	if err != nil {
 		s.storyLine.Add("container_command_run_err", err)
 		s.logger.Printf("command '%v' finished with error: %v", s.GetCommand(), err)
@@ -467,6 +485,10 @@ func (s *VM) Cleanup() error {
 		}
 		return err2
 	}
+	err = s.streams.Cleanup()
+	if err != nil {
+		s.storyLine.Add("streamsCleanUpErr", err)
+	}
 	return nil
 }
 
@@ -507,6 +529,10 @@ func (s *VM) RunCommand(ctx context.Context, cmd []string, opts ...sshrunner.Opt
 
 func (s *VM) PortForward(ctx context.Context, port int32, stream io.ReadWriteCloser) error {
 	return s.portForwarder.PortForward(ctx, fmt.Sprintf("%s:%d", s.safeGetPod().Status.PodIP, port), stream)
+}
+
+func (s *VM) AttachToContainer(ctx context.Context, attach api.AttachIO) error {
+	return s.streams.Stream(ctx, attach, s.logger.Printf)
 }
 
 // Below are functions which are safe to call in multiple goroutines
