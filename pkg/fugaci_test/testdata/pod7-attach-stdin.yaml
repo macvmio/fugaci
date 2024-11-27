@@ -6,8 +6,10 @@ spec:
   containers:
     - image: ghcr.io/macvmio/macos-sonoma:14.5-agent-v1.7
       imagePullPolicy: Never
-      command: [ "bash", "-c", 'for ((i=1;;i++)); do echo "$i"; sleep 0.1; done' ]
+      command: [ "bash" ]
       name: curie3
+      stdin: true
+      tty: true
       envFrom:
         - secretRef:
             name: fugaci-ssh-secret

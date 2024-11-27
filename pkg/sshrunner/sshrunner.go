@@ -33,6 +33,7 @@ func handleSSHWindowResize(session *ssh.Session, resize <-chan api.TermSize) {
 		// Send the window change request to the SSH session with the new terminal size
 		if err := session.WindowChange(int(termSize.Height), int(termSize.Width)); err != nil {
 			log.Printf("failed to change window size: %v\n", err)
+			break
 		}
 	}
 	log.Printf("window resize terminated")

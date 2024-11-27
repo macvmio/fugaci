@@ -4,55 +4,58 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/macvmio/fugaci/pkg/ctxio"
+	"github.com/virtual-kubelet/virtual-kubelet/node/api"
 	"io"
 	"os"
 	"sync"
-	"time"
-
-	"github.com/macvmio/fugaci/pkg/ctxio"
-	"github.com/virtual-kubelet/virtual-kubelet/node/api"
 )
 
 var _ api.AttachIO = (*FilesBasedStreams)(nil)
 
 type FilesBasedStreams struct {
-	stdinFile  *os.File
 	stdoutFile *os.File
 	stderrFile *os.File
+
+	stdinReader *os.File
+	stdinWriter *os.File
+
+	allocateTTY bool
+	termSizeCh  chan api.TermSize
 
 	mu        sync.Mutex
 	cleanupWG sync.WaitGroup
 	cleanOnce sync.Once
 }
 
-func NewFilesBasedStreams(directory, prefix string) (*FilesBasedStreams, error) {
-	stdinFile, err := os.CreateTemp(directory, prefix+"_vm_stdin_*.log")
-	if err != nil {
-		return nil, fmt.Errorf("error creating temporary stdin file: %v", err)
+func NewFilesBasedStreams(directory, prefix string, allocateStdin, allocateTTY bool) (*FilesBasedStreams, error) {
+	var err error
+	f := FilesBasedStreams{allocateTTY: allocateTTY}
+	if allocateTTY {
+		f.termSizeCh = make(chan api.TermSize)
 	}
-
-	stdoutFile, err := os.CreateTemp(directory, prefix+"_vm_stdout_*.log")
+	f.stdoutFile, err = os.CreateTemp(directory, prefix+"_vm_stdout_*.log")
 	if err != nil {
-		stdinFile.Close()
 		return nil, fmt.Errorf("error creating temporary stdout file: %v", err)
 	}
 
-	stderrFile, err := os.CreateTemp(directory, prefix+"_vm_stderr_*.log")
+	f.stderrFile, err = os.CreateTemp(directory, prefix+"_vm_stderr_*.log")
 	if err != nil {
-		stdinFile.Close()
-		stdoutFile.Close()
+		f.stdoutFile.Close()
 		return nil, fmt.Errorf("error creating temporary stderr file: %v", err)
 	}
 
-	return &FilesBasedStreams{
-		stdinFile:  stdinFile,
-		stdoutFile: stdoutFile,
-		stderrFile: stderrFile,
-	}, nil
+	if allocateStdin {
+		f.stdinReader, f.stdinWriter, err = os.Pipe()
+		if err != nil {
+			return nil, fmt.Errorf("error creating stdin pipe: %v", err)
+		}
+	}
+	return &f, nil
 }
 
 func (f *FilesBasedStreams) Stdin() io.Reader {
-	return f.stdinFile
+	return f.stdinReader
 }
 
 func (f *FilesBasedStreams) Stdout() io.WriteCloser {
@@ -64,12 +67,11 @@ func (f *FilesBasedStreams) Stderr() io.WriteCloser {
 }
 
 func (f *FilesBasedStreams) TTY() bool {
-	return false
+	return f.allocateTTY
 }
 
 func (f *FilesBasedStreams) Resize() <-chan api.TermSize {
-	// TODO: implement if needed
-	return nil
+	return f.termSizeCh
 }
 
 // Cleanup removes the temporary files created for stdin, stdout, and stderr.
@@ -84,37 +86,24 @@ func (f *FilesBasedStreams) Cleanup() error {
 		// Wait for any ongoing operations to finish
 		f.cleanupWG.Wait()
 
-		// Close and remove stdinFile
-		if f.stdinFile != nil {
-			if err := f.stdinFile.Close(); err != nil {
-				errs = append(errs, fmt.Errorf("failed to close stdin file: %w", err))
-			}
-			if err := os.Remove(f.stdinFile.Name()); err != nil {
-				errs = append(errs, fmt.Errorf("failed to remove stdin file: %w", err))
-			}
-			f.stdinFile = nil
+		if err := f.stdoutFile.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close stdout file: %w", err))
+		}
+		if err := os.Remove(f.stdoutFile.Name()); err != nil {
+			errs = append(errs, fmt.Errorf("failed to remove stdout file: %w", err))
 		}
 
-		// Close and remove stdoutFile
-		if f.stdoutFile != nil {
-			if err := f.stdoutFile.Close(); err != nil {
-				errs = append(errs, fmt.Errorf("failed to close stdout file: %w", err))
-			}
-			if err := os.Remove(f.stdoutFile.Name()); err != nil {
-				errs = append(errs, fmt.Errorf("failed to remove stdout file: %w", err))
-			}
-			f.stdoutFile = nil
+		if err := f.stderrFile.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close stderr file: %w", err))
+		}
+		if err := os.Remove(f.stderrFile.Name()); err != nil {
+			errs = append(errs, fmt.Errorf("failed to remove stderr file: %w", err))
 		}
 
-		// Close and remove stderrFile
-		if f.stderrFile != nil {
-			if err := f.stderrFile.Close(); err != nil {
-				errs = append(errs, fmt.Errorf("failed to close stderr file: %w", err))
-			}
-			if err := os.Remove(f.stderrFile.Name()); err != nil {
-				errs = append(errs, fmt.Errorf("failed to remove stderr file: %w", err))
-			}
-			f.stderrFile = nil
+		// Close termSizeCh
+		if f.termSizeCh != nil {
+			close(f.termSizeCh)
+			f.termSizeCh = nil
 		}
 	})
 
@@ -154,20 +143,30 @@ func (f *FilesBasedStreams) Stream(ctx context.Context, attach api.AttachIO, log
 	}()
 
 	// Handle stdin
-	if attach.Stdin() != nil {
+	if f.stdinWriter != nil && attach.Stdin() != nil {
 		f.cleanupWG.Add(1)
 		go func() {
 			defer f.cleanupWG.Done()
-			_, err := io.Copy(f.stdinFile, ctxio.NewContextPeriodicReader(ctx, 200*time.Millisecond, attach.Stdin()))
+			_, err := io.Copy(f.stdinWriter, attach.Stdin())
 			if !allowableError(err) {
 				loggerPrintf("Error streaming stdin: %v", err)
 			}
 		}()
 	}
 
+	if attach.TTY() {
+		f.cleanupWG.Add(1)
+		go func() {
+			defer f.cleanupWG.Done()
+			for termSize := range attach.Resize() {
+				f.termSizeCh <- termSize
+			}
+		}()
+	}
 	// Wait for context cancellation
+	loggerPrintf("waiting for Stream to finish")
 	<-ctx.Done()
-
+	loggerPrintf("Stream has completed")
 	return nil
 }
 

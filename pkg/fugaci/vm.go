@@ -106,17 +106,19 @@ func NewVM(ctx context.Context,
 	cst.Name = pod.Spec.Containers[containerIndex].Name
 	cst.State = v1.ContainerState{Waiting: &v1.ContainerStateWaiting{Reason: "Creating", Message: "Just initialized"}}
 
+	cspec := pod.Spec.Containers[containerIndex]
+
 	customLogger := log.New(os.Stdout,
 		fmt.Sprintf("pod=%s/%s, ", pod.Namespace, pod.Name),
 		log.LstdFlags|log.Lmsgprefix|log.Lshortfile)
 
-	envVars, username, password, err := extractSSHEnvVars(pod.Spec.Containers[containerIndex])
+	envVars, username, password, err := extractSSHEnvVars(cspec)
 	if err != nil {
 		return nil, fmt.Errorf("failed to extract ssh env vars: %w", err)
 	}
 
-	fileStreams, err := streams.NewFilesBasedStreams(containerLogsDirectory,
-		fmt.Sprintf("%s_%s_%s", pod.Namespace, pod.Name, cst.Name))
+	lognamePrefix := fmt.Sprintf("%s_%s_%s", pod.Namespace, pod.Name, cst.Name)
+	fileStreams, err := streams.NewFilesBasedStreams(containerLogsDirectory, lognamePrefix, cspec.Stdin, cspec.TTY)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temporary files based streams: %w", err)
 	}
