@@ -1,4 +1,4 @@
-# Fugaci
+![Fugaci](resources/fugaci-logo.png)
 
 Fugaci is a Kubernetes-based system for serving ephemeral macOS virtual machines (VMs). It integrates seamlessly with Kubernetes, allowing macOS-specific workflows to be managed through standard Kubernetes APIs (`kubectl`). Fugaci presents itself as a Kubernetes node with specific taints, enabling it to run macOS workloads while not interfering with standard Linux container workflows.
 
