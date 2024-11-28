@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/macvmio/fugaci/pkg/ctxio"
 	"github.com/virtual-kubelet/virtual-kubelet/node/api"
+	"golang.org/x/sync/errgroup"
 	"io"
 	"os"
 	"sync"
@@ -74,38 +75,32 @@ func (f *FilesBasedStreams) Resize() <-chan api.TermSize {
 	return f.termSizeCh
 }
 
-// Cleanup removes the temporary files created for stdin, stdout, and stderr.
-// It is safe to call Cleanup multiple times concurrently.
-func (f *FilesBasedStreams) Cleanup() error {
+// Close removes the temporary files created for stdin, stdout, and stderr.
+// It is safe to call Close multiple times concurrently.
+func (f *FilesBasedStreams) Close() error {
 	var errs []error
+	// Wait for any ongoing operations to finish
+	f.cleanupWG.Wait()
 
-	f.cleanOnce.Do(func() {
-		f.mu.Lock()
-		defer f.mu.Unlock()
+	if err := f.stdoutFile.Close(); err != nil {
+		errs = append(errs, fmt.Errorf("failed to close stdout file: %w", err))
+	}
+	if err := os.Remove(f.stdoutFile.Name()); err != nil {
+		errs = append(errs, fmt.Errorf("failed to remove stdout file: %w", err))
+	}
 
-		// Wait for any ongoing operations to finish
-		f.cleanupWG.Wait()
+	if err := f.stderrFile.Close(); err != nil {
+		errs = append(errs, fmt.Errorf("failed to close stderr file: %w", err))
+	}
+	if err := os.Remove(f.stderrFile.Name()); err != nil {
+		errs = append(errs, fmt.Errorf("failed to remove stderr file: %w", err))
+	}
 
-		if err := f.stdoutFile.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("failed to close stdout file: %w", err))
-		}
-		if err := os.Remove(f.stdoutFile.Name()); err != nil {
-			errs = append(errs, fmt.Errorf("failed to remove stdout file: %w", err))
-		}
-
-		if err := f.stderrFile.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("failed to close stderr file: %w", err))
-		}
-		if err := os.Remove(f.stderrFile.Name()); err != nil {
-			errs = append(errs, fmt.Errorf("failed to remove stderr file: %w", err))
-		}
-
-		// Close termSizeCh
-		if f.termSizeCh != nil {
-			close(f.termSizeCh)
-			f.termSizeCh = nil
-		}
-	})
+	// Close termSizeCh
+	if f.termSizeCh != nil {
+		close(f.termSizeCh)
+		f.termSizeCh = nil
+	}
 
 	if len(errs) > 0 {
 		return fmt.Errorf("cleanup encountered errors: %v", errs)
@@ -114,66 +109,93 @@ func (f *FilesBasedStreams) Cleanup() error {
 }
 
 func (f *FilesBasedStreams) Stream(ctx context.Context, attach api.AttachIO, loggerPrintf func(format string, v ...any)) error {
-	f.cleanupWG.Add(1)
 	allowableError := func(err error) bool {
-		if err == nil {
-			return true
-		}
-		return errors.Is(err, context.Canceled) || errors.Is(err, io.EOF)
+		return err == nil || errors.Is(err, context.Canceled) || errors.Is(err, io.EOF)
 	}
-	go func() {
-		defer f.cleanupWG.Done()
-		// Start streaming stdout
-		if attach.Stdout() != nil {
-			if err := followFileStream(ctx, attach.Stdout(), f.stdoutFile.Name(), loggerPrintf); !allowableError(err) {
-				loggerPrintf("Error streaming stdout: %v", err)
-			}
-		}
-	}()
 
-	f.cleanupWG.Add(1)
-	go func() {
-		defer f.cleanupWG.Done()
-		// Start streaming stderr
-		if attach.Stderr() != nil {
-			if err := followFileStream(ctx, attach.Stderr(), f.stderrFile.Name(), loggerPrintf); !allowableError(err) {
-				loggerPrintf("Error streaming stderr: %v", err)
+	// Create an errgroup with the provided context
+	eg, ctx := errgroup.WithContext(ctx)
+
+	// Start streaming stdout
+	if attach.Stdout() != nil {
+		f.cleanupWG.Add(1)
+		eg.Go(func() error {
+			defer f.cleanupWG.Done()
+			err := followFileStream(ctx, attach.Stdout(), f.stdoutFile.Name(), loggerPrintf)
+			if !allowableError(err) {
+				loggerPrintf("Error streaming stdout: %v", err)
+				return err
 			}
-		}
-	}()
+			loggerPrintf("stdout copy completed")
+			return nil
+		})
+	}
+
+	// Start streaming stderr
+	if attach.Stderr() != nil {
+		f.cleanupWG.Add(1)
+		eg.Go(func() error {
+			defer f.cleanupWG.Done()
+			err := followFileStream(ctx, attach.Stderr(), f.stderrFile.Name(), loggerPrintf)
+			if !allowableError(err) {
+				loggerPrintf("Error streaming stderr: %v", err)
+				return err
+			}
+			loggerPrintf("stderr copy completed")
+			return nil
+		})
+	}
 
 	// Handle stdin
 	if f.stdinWriter != nil && attach.Stdin() != nil {
 		f.cleanupWG.Add(1)
 		go func() {
 			defer f.cleanupWG.Done()
+			// TODO: This blocks until if stdin has no data, even if context is cancelled
 			_, err := io.Copy(f.stdinWriter, attach.Stdin())
 			if !allowableError(err) {
 				loggerPrintf("Error streaming stdin: %v", err)
 			}
+			loggerPrintf("stdin copy completed")
 		}()
 	}
 
+	// Handle TTY resize events
 	if attach.TTY() {
 		f.cleanupWG.Add(1)
-		go func() {
+		eg.Go(func() error {
 			defer f.cleanupWG.Done()
-			for termSize := range attach.Resize() {
-				f.termSizeCh <- termSize
+			defer loggerPrintf("attach tty channel completed")
+			for {
+				select {
+				case termSize, ok := <-attach.Resize():
+					if !ok {
+						// The attach.Resize() channel is closed
+						return nil
+					}
+					select {
+					case f.termSizeCh <- termSize:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				case <-ctx.Done():
+					return ctx.Err()
+				}
 			}
-		}()
+		})
 	}
-	// Wait for context cancellation
-	loggerPrintf("waiting for Stream to finish")
-	<-ctx.Done()
-	loggerPrintf("Stream has completed")
-	return nil
+
+	loggerPrintf("waiting for Stream() to finish")
+	err := eg.Wait()
+	loggerPrintf("Stream() has completed")
+	return err
 }
 
-func followFileStream(ctx context.Context, writer io.Writer, filename string, loggerPrintf func(format string, v ...any)) error {
+func followFileStream(ctx context.Context, writer io.WriteCloser, filename string, loggerPrintf func(format string, v ...any)) error {
 	if writer == nil {
 		return fmt.Errorf("writer cannot be nil")
 	}
+	defer writer.Close()
 
 	tailReader, err := ctxio.NewTailReader(ctx, filename)
 	if err != nil {

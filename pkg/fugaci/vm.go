@@ -373,12 +373,14 @@ func (s *VM) Run() {
 
 	err = s.waitAndRunCommandInside(s.cmdLifetimeCtx, startedAt.Time, containerID)
 
-	s.wg.Add(1)
 	// This needs to be done on separate thread, because otherwise will result in defunct process,
 	// and Stop() method will keep running
+	s.wg.Add(1)
 	go s.stopContainer(containerID, startedAt.Time)
 
 	err = runCmd.Wait()
+	s.cmdCancelFunc(nil)
+
 	s.storyLine.Add("container_exitcode", runCmd.ProcessState.ExitCode())
 	s.storyLine.Add("container_process_state", runCmd.ProcessState)
 	if err != nil && runCmd.ProcessState.ExitCode() != 0 {
@@ -388,6 +390,10 @@ func (s *VM) Run() {
 		return
 	}
 
+	err = s.streams.Close()
+	if err != nil {
+		s.storyLine.Add("streamsClosingErr", err)
+	}
 	s.logger.Printf("container '%v' finished successfully: %v, exit code=%d\n", containerID, runCmd, runCmd.ProcessState.ExitCode())
 	s.safeUpdateState(v1.ContainerState{Terminated: &v1.ContainerStateTerminated{
 		ExitCode:    int32(runCmd.ProcessState.ExitCode()),
@@ -486,10 +492,6 @@ func (s *VM) Cleanup() error {
 			s.storyLine.Add("cleanUpError", err2)
 		}
 		return err2
-	}
-	err = s.streams.Cleanup()
-	if err != nil {
-		s.storyLine.Add("streamsCleanUpErr", err)
 	}
 	return nil
 }
