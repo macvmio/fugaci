@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/macvmio/fugaci/pkg/ctxio"
 	"github.com/macvmio/fugaci/pkg/curie"
 	"github.com/macvmio/fugaci/pkg/portforwarder"
 	"github.com/macvmio/fugaci/pkg/sshrunner"
@@ -63,6 +64,7 @@ func (s *Provider) allocateVM(pod *v1.Pod) (*VM, error) {
 		}
 		vm, err := NewVM(s.appContext, s.virt, s.puller,
 			sshrunner.NewRunner(), portforwarder.NewPortForwarder(),
+			s.cfg.ContainerLogsDirectory,
 			pod, 0)
 		if err != nil {
 			return nil, err
@@ -225,11 +227,19 @@ func (s *Provider) PortForward(ctx context.Context, namespace, podName string, p
 	if err != nil {
 		return fmt.Errorf("failed to find VM for pod %s/%s: %w", namespace, podName, err)
 	}
+	ctx, cancel := ctxio.MultiContext(ctx, vm.cmdLifetimeCtx)
+	defer cancel()
 	return vm.PortForward(ctx, port, stream)
 }
 
 func (s *Provider) AttachToContainer(ctx context.Context, namespace, podName, containerName string, attach api.AttachIO) error {
-	return ErrNotImplemented
+	vm, err := s.findVMByNames(namespace, podName, containerName)
+	if err != nil {
+		return fmt.Errorf("failed to find VM for pod %s/%s: %w", namespace, podName, err)
+	}
+	ctx, cancel := ctxio.MultiContext(ctx, vm.cmdLifetimeCtx)
+	defer cancel()
+	return vm.AttachToContainer(ctx, attach)
 }
 
 func (s *Provider) GetStatsSummary(ctx context.Context) (*statsv1alpha1.Summary, error) {

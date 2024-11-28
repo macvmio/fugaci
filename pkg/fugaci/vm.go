@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/macvmio/fugaci/pkg/streams"
+	"github.com/virtual-kubelet/virtual-kubelet/node/api"
 	"io"
 	"log"
 	"net"
@@ -75,11 +77,19 @@ type VM struct {
 	sshDialInfo sshrunner.DialInfo
 	env         []v1.EnvVar
 
+	streams   *streams.FilesBasedStreams
 	logger    *log.Logger
 	storyLine *storyline.StoryLine
 }
 
-func NewVM(ctx context.Context, virt Virtualization, puller Puller, sshRunner SSHRunner, portForwarder PortForwarder, pod *v1.Pod, containerIndex int) (*VM, error) {
+func NewVM(ctx context.Context,
+	virt Virtualization,
+	puller Puller,
+	sshRunner SSHRunner,
+	portForwarder PortForwarder,
+	containerLogsDirectory string,
+	pod *v1.Pod,
+	containerIndex int) (*VM, error) {
 	if containerIndex < 0 || containerIndex >= len(pod.Spec.Containers) {
 		return nil, errors.New("invalid container index")
 	}
@@ -96,13 +106,21 @@ func NewVM(ctx context.Context, virt Virtualization, puller Puller, sshRunner SS
 	cst.Name = pod.Spec.Containers[containerIndex].Name
 	cst.State = v1.ContainerState{Waiting: &v1.ContainerStateWaiting{Reason: "Creating", Message: "Just initialized"}}
 
+	cspec := pod.Spec.Containers[containerIndex]
+
 	customLogger := log.New(os.Stdout,
 		fmt.Sprintf("pod=%s/%s, ", pod.Namespace, pod.Name),
 		log.LstdFlags|log.Lmsgprefix|log.Lshortfile)
 
-	envVars, username, password, err := extractSSHEnvVars(pod.Spec.Containers[containerIndex])
+	envVars, username, password, err := extractSSHEnvVars(cspec)
 	if err != nil {
 		return nil, fmt.Errorf("failed to extract ssh env vars: %w", err)
+	}
+
+	lognamePrefix := fmt.Sprintf("%s_%s_%s", pod.Namespace, pod.Name, cst.Name)
+	fileStreams, err := streams.NewFilesBasedStreams(containerLogsDirectory, lognamePrefix, cspec.Stdin, cspec.TTY)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temporary files based streams: %w", err)
 	}
 
 	vm := &VM{
@@ -122,6 +140,7 @@ func NewVM(ctx context.Context, virt Virtualization, puller Puller, sshRunner SS
 			Password: password,
 		},
 		env:       envVars,
+		streams:   fileStreams,
 		logger:    customLogger,
 		storyLine: storyline.New(),
 	}
@@ -237,7 +256,8 @@ func (s *VM) waitAndRunCommandInside(ctx context.Context, startedAt time.Time, c
 	s.logger.Printf("successfully established SSH session")
 	command := s.GetCommand()
 	s.storyLine.Add("container_command", command)
-	err = s.RunCommand(ctx, command, sshrunner.WithEnv(s.GetEnvVars()))
+
+	err = s.RunCommand(ctx, command, sshrunner.WithEnv(s.GetEnvVars()), sshrunner.WithAttachIO(s.streams))
 	if err != nil {
 		s.storyLine.Add("container_command_run_err", err)
 		s.logger.Printf("command '%v' finished with error: %v", s.GetCommand(), err)
@@ -353,12 +373,14 @@ func (s *VM) Run() {
 
 	err = s.waitAndRunCommandInside(s.cmdLifetimeCtx, startedAt.Time, containerID)
 
-	s.wg.Add(1)
 	// This needs to be done on separate thread, because otherwise will result in defunct process,
 	// and Stop() method will keep running
+	s.wg.Add(1)
 	go s.stopContainer(containerID, startedAt.Time)
 
 	err = runCmd.Wait()
+	s.cmdCancelFunc(nil)
+
 	s.storyLine.Add("container_exitcode", runCmd.ProcessState.ExitCode())
 	s.storyLine.Add("container_process_state", runCmd.ProcessState)
 	if err != nil && runCmd.ProcessState.ExitCode() != 0 {
@@ -368,6 +390,10 @@ func (s *VM) Run() {
 		return
 	}
 
+	err = s.streams.Close()
+	if err != nil {
+		s.storyLine.Add("streamsClosingErr", err)
+	}
 	s.logger.Printf("container '%v' finished successfully: %v, exit code=%d\n", containerID, runCmd, runCmd.ProcessState.ExitCode())
 	s.safeUpdateState(v1.ContainerState{Terminated: &v1.ContainerStateTerminated{
 		ExitCode:    int32(runCmd.ProcessState.ExitCode()),
@@ -507,6 +533,10 @@ func (s *VM) RunCommand(ctx context.Context, cmd []string, opts ...sshrunner.Opt
 
 func (s *VM) PortForward(ctx context.Context, port int32, stream io.ReadWriteCloser) error {
 	return s.portForwarder.PortForward(ctx, fmt.Sprintf("%s:%d", s.safeGetPod().Status.PodIP, port), stream)
+}
+
+func (s *VM) AttachToContainer(ctx context.Context, attach api.AttachIO) error {
+	return s.streams.Stream(ctx, attach, s.logger.Printf)
 }
 
 // Below are functions which are safe to call in multiple goroutines

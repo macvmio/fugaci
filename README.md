@@ -55,6 +55,7 @@ tailored to their specific macOS deployment needs.
    ```yaml
    nodeName: mac-m1
    kubeConfigPath: /Users/your_username/.kube/config
+   containerLogsDirectory: /var/logs/fugaci 
    curieVirtualization:
      binaryPath: /usr/local/bin/curie
      dataRootPath: /Users/your_username/.curie
