@@ -3,6 +3,7 @@ package streams
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -74,7 +75,7 @@ func TestStreamStdout(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		err := fbs.Stream(ctx, attachIO, t.Logf)
-		if err != nil {
+		if !errors.Is(err, context.Canceled) {
 			t.Errorf("Stream returned error: %v", err)
 		}
 	}()
@@ -118,7 +119,7 @@ func TestStreamStderr(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		err := fbs.Stream(ctx, attachIO, t.Logf)
-		if err != nil {
+		if !errors.Is(err, context.Canceled) {
 			t.Errorf("Stream returned error: %v", err)
 		}
 	}()
@@ -158,7 +159,7 @@ func TestStreamStdin(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		err := fbs.Stream(ctx, attachIO, t.Logf)
-		if err != nil {
+		if !errors.Is(err, context.Canceled) {
 			t.Errorf("Stream returned error: %v", err)
 		}
 	}()
@@ -198,7 +199,7 @@ func TestContextCancellation(t *testing.T) {
 	go func() {
 		defer close(doneCh)
 		err := fbs.Stream(ctx, attachIO, t.Logf)
-		if err != nil {
+		if !errors.Is(err, context.Canceled) {
 			t.Errorf("Stream returned error: %v", err)
 		}
 	}()
@@ -261,7 +262,7 @@ func TestTTYResizeEvents(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		err := fbs.Stream(ctx, attachIO, t.Logf)
-		if err != nil {
+		if !errors.Is(err, context.Canceled) {
 			t.Errorf("Stream returned error: %v", err)
 		}
 	}()

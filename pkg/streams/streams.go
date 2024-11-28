@@ -109,10 +109,6 @@ func (f *FilesBasedStreams) Close() error {
 }
 
 func (f *FilesBasedStreams) Stream(ctx context.Context, attach api.AttachIO, loggerPrintf func(format string, v ...any)) error {
-	allowableError := func(err error) bool {
-		return err == nil || errors.Is(err, context.Canceled) || errors.Is(err, io.EOF)
-	}
-
 	// Create an errgroup with the provided context
 	eg, ctx := errgroup.WithContext(ctx)
 
@@ -122,12 +118,8 @@ func (f *FilesBasedStreams) Stream(ctx context.Context, attach api.AttachIO, log
 		eg.Go(func() error {
 			defer f.cleanupWG.Done()
 			err := followFileStream(ctx, attach.Stdout(), f.stdoutFile.Name(), loggerPrintf)
-			if !allowableError(err) {
-				loggerPrintf("Error streaming stdout: %v", err)
-				return err
-			}
 			loggerPrintf("stdout copy completed")
-			return nil
+			return err
 		})
 	}
 
@@ -137,12 +129,8 @@ func (f *FilesBasedStreams) Stream(ctx context.Context, attach api.AttachIO, log
 		eg.Go(func() error {
 			defer f.cleanupWG.Done()
 			err := followFileStream(ctx, attach.Stderr(), f.stderrFile.Name(), loggerPrintf)
-			if !allowableError(err) {
-				loggerPrintf("Error streaming stderr: %v", err)
-				return err
-			}
 			loggerPrintf("stderr copy completed")
-			return nil
+			return err
 		})
 	}
 
@@ -153,10 +141,7 @@ func (f *FilesBasedStreams) Stream(ctx context.Context, attach api.AttachIO, log
 			defer f.cleanupWG.Done()
 			// TODO: This blocks until if stdin has no data, even if context is cancelled
 			_, err := io.Copy(f.stdinWriter, attach.Stdin())
-			if !allowableError(err) {
-				loggerPrintf("Error streaming stdin: %v", err)
-			}
-			loggerPrintf("stdin copy completed")
+			loggerPrintf("stdin copy completed: %v", err)
 		}()
 	}
 
