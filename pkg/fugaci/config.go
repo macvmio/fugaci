@@ -8,11 +8,11 @@ import (
 )
 
 type Config struct {
-	NodeName            string `mapstructure:"nodeName"`
-	KubeConfigPath      string `mapstructure:"kubeConfigPath"`
-	LogLevel            string `mapstructure:"logLevel"`
-	LogsDirectory       string `mapstructure:"logsDirectory"`
-	CurieVirtualization struct {
+	NodeName               string `mapstructure:"nodeName"`
+	KubeConfigPath         string `mapstructure:"kubeConfigPath"`
+	LogLevel               string `mapstructure:"logLevel"`
+	ContainerLogsDirectory string `mapstructure:"containerLogsDirectory"`
+	CurieVirtualization    struct {
 		BinaryPath   string `mapstructure:"binaryPath"`
 		DataRootPath string `mapstructure:"dataRootPath"`
 	} `mapstructure:"curieVirtualization"`
@@ -36,12 +36,12 @@ func (c *Config) Validate() error {
 
 	// Validate the paths
 	paths := map[string]string{
-		"KubeConfigPath":    c.KubeConfigPath,
-		"CurieBinaryPath":   c.CurieVirtualization.BinaryPath,
-		"CurieDataRootPath": c.CurieVirtualization.DataRootPath,
-		"LogsDirectory":     c.LogsDirectory,
-		"TLS.KeyPath":       c.TLS.KeyPath,
-		"TLS.CertPath":      c.TLS.CertPath,
+		"KubeConfigPath":         c.KubeConfigPath,
+		"CurieBinaryPath":        c.CurieVirtualization.BinaryPath,
+		"CurieDataRootPath":      c.CurieVirtualization.DataRootPath,
+		"ContainerLogsDirectory": c.ContainerLogsDirectory,
+		"TLS.KeyPath":            c.TLS.KeyPath,
+		"TLS.CertPath":           c.TLS.CertPath,
 	}
 
 	for name, path := range paths {

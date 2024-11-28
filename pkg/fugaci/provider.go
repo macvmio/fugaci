@@ -64,7 +64,7 @@ func (s *Provider) allocateVM(pod *v1.Pod) (*VM, error) {
 		}
 		vm, err := NewVM(s.appContext, s.virt, s.puller,
 			sshrunner.NewRunner(), portforwarder.NewPortForwarder(),
-			s.cfg.LogsDirectory,
+			s.cfg.ContainerLogsDirectory,
 			pod, 0)
 		if err != nil {
 			return nil, err
