@@ -3,8 +3,8 @@ package streams
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
+	"github.com/stretchr/testify/require"
 	"io"
 	"os"
 	"strings"
@@ -50,93 +50,145 @@ func TestNewFilesBasedStreams(t *testing.T) {
 }
 
 func TestStreamStdout(t *testing.T) {
-	fbs := setupFilesBasedStreams(t, false, false)
-	defer teardownFilesBasedStreams(t, fbs)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Prepare mock attachIO
-	stdoutBuf := &bytes.Buffer{}
-	attachIO := &MockAttachIO{
-		stdout: stdoutBuf,
+	tests := []struct {
+		name           string
+		writeData      bool
+		expectedOutput string
+	}{
+		{
+			name:           "WithData",
+			writeData:      true,
+			expectedOutput: "Hello, stdout!",
+		},
+		{
+			name:           "WithoutData",
+			writeData:      false,
+			expectedOutput: "",
+		},
 	}
 
-	// Write data to stdoutFile
-	expectedOutput := "Hello, stdout!"
-	_, err := fbs.stdoutFile.WriteString(expectedOutput + "\n")
-	if err != nil {
-		t.Fatalf("Failed to write to stdoutFile: %v", err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fbs := setupFilesBasedStreams(t, false, false)
+			defer teardownFilesBasedStreams(t, fbs)
 
-	// Start streaming
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		err := fbs.Stream(ctx, attachIO, t.Logf)
-		if !errors.Is(err, context.Canceled) {
-			t.Errorf("Stream returned error: %v", err)
-		}
-	}()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
 
-	// Give some time for the data to be streamed
-	time.Sleep(25 * time.Millisecond)
+			// Prepare mock attachIO
+			stdoutBuf := &bytes.Buffer{}
+			attachIO := &MockAttachIO{
+				stdout: stdoutBuf,
+			}
 
-	// Cancel context to stop streaming
-	cancel()
-	wg.Wait()
+			if tt.writeData {
+				// Write data to stdoutFile if applicable
+				_, err := fbs.stdoutFile.WriteString(tt.expectedOutput + "\n")
+				if err != nil {
+					t.Fatalf("Failed to write to stdoutFile: %v", err)
+				}
+			}
 
-	// Verify that data was received
-	output := stdoutBuf.String()
-	if !strings.Contains(output, expectedOutput) {
-		t.Errorf("Expected output %q in stdout, got %q", expectedOutput, output)
+			// Start streaming
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				err := fbs.Stream(ctx, attachIO, t.Logf)
+				require.NoError(t, err)
+			}()
+
+			// Give some time for the data to be streamed
+			time.Sleep(25 * time.Millisecond)
+
+			// Cancel context to stop streaming
+			cancel()
+			wg.Wait()
+
+			// Verify the received data
+			output := stdoutBuf.String()
+			if tt.writeData {
+				if !strings.Contains(output, tt.expectedOutput) {
+					t.Errorf("Expected output %q in stdout, got %q", tt.expectedOutput, output)
+				}
+			} else {
+				if output != "" {
+					t.Errorf("Expected no output in stdout, got %q", output)
+				}
+			}
+		})
 	}
 }
 
 func TestStreamStderr(t *testing.T) {
-	fbs := setupFilesBasedStreams(t, false, false)
-	defer teardownFilesBasedStreams(t, fbs)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Prepare mock attachIO
-	stderrBuf := &bytes.Buffer{}
-	attachIO := &MockAttachIO{
-		stderr: stderrBuf,
-	}
-	// Write data to stderrFile
-	expectedOutput := "Hello, stderr!"
-	_, err := fbs.stderrFile.WriteString(expectedOutput + "\n")
-	if err != nil {
-		t.Fatalf("Failed to write to stderrFile: %v", err)
-	}
-
-	// Start streaming
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		err := fbs.Stream(ctx, attachIO, t.Logf)
-		if !errors.Is(err, context.Canceled) {
-			t.Errorf("Stream returned error: %v", err)
-		}
-	}()
-
-	// Give some time for the data to be streamed
-	time.Sleep(25 * time.Millisecond)
-
-	// Cancel context to stop streaming
-	cancel()
-	wg.Wait()
-
-	// Verify that data was received
-	output := stderrBuf.String()
-	if !strings.Contains(output, expectedOutput) {
-		t.Errorf("Expected output %q in stderr, got %q", expectedOutput, output)
+	tests := []struct {
+		name           string
+		writeData      bool
+		expectedOutput string
+	}{
+		{
+			name:           "WithData",
+			writeData:      true,
+			expectedOutput: "Hello, stderr!",
+		},
+		{
+			name:           "WithoutData",
+			writeData:      false,
+			expectedOutput: "",
+		},
 	}
 
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fbs := setupFilesBasedStreams(t, false, false)
+			defer teardownFilesBasedStreams(t, fbs)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			// Prepare mock attachIO
+			stderrBuf := &bytes.Buffer{}
+			attachIO := &MockAttachIO{
+				stderr: stderrBuf,
+			}
+
+			if tt.writeData {
+				// Write data to stderrFile if applicable
+				_, err := fbs.stderrFile.WriteString(tt.expectedOutput + "\n")
+				if err != nil {
+					t.Fatalf("Failed to write to stderrFile: %v", err)
+				}
+			}
+
+			// Start streaming
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				err := fbs.Stream(ctx, attachIO, t.Logf)
+				require.NoError(t, err)
+			}()
+
+			// Give some time for the data to be streamed
+			time.Sleep(25 * time.Millisecond)
+
+			// Cancel context to stop streaming
+			cancel()
+			wg.Wait()
+
+			// Verify the received data
+			output := stderrBuf.String()
+			if tt.writeData {
+				if !strings.Contains(output, tt.expectedOutput) {
+					t.Errorf("Expected output %q in stderr, got %q", tt.expectedOutput, output)
+				}
+			} else {
+				if output != "" {
+					t.Errorf("Expected no output in stderr, got %q", output)
+				}
+			}
+		})
+	}
 }
 
 func TestStreamStdin(t *testing.T) {
@@ -159,9 +211,7 @@ func TestStreamStdin(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		err := fbs.Stream(ctx, attachIO, t.Logf)
-		if !errors.Is(err, context.Canceled) {
-			t.Errorf("Stream returned error: %v", err)
-		}
+		require.NoError(t, err)
 	}()
 
 	// Read data from stdinReader
@@ -199,9 +249,7 @@ func TestContextCancellation(t *testing.T) {
 	go func() {
 		defer close(doneCh)
 		err := fbs.Stream(ctx, attachIO, t.Logf)
-		if !errors.Is(err, context.Canceled) {
-			t.Errorf("Stream returned error: %v", err)
-		}
+		require.NoError(t, err)
 	}()
 
 	// Cancel context after a short delay
@@ -217,15 +265,8 @@ func TestContextCancellation(t *testing.T) {
 	}
 }
 
-func TestClose(t *testing.T) {
+func TestCloseWithoutAnyStreamCalls(t *testing.T) {
 	fbs := setupFilesBasedStreams(t, true, false)
-
-	// Start some operation to ensure cleanup is necessary
-	fbs.cleanupWG.Add(1)
-	go func() {
-		defer fbs.cleanupWG.Done()
-		time.Sleep(25 * time.Millisecond)
-	}()
 
 	err := fbs.Close()
 	if err != nil {
@@ -262,9 +303,7 @@ func TestTTYResizeEvents(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		err := fbs.Stream(ctx, attachIO, t.Logf)
-		if !errors.Is(err, context.Canceled) {
-			t.Errorf("Stream returned error: %v", err)
-		}
+		require.NoError(t, err)
 	}()
 
 	// Send a resize event
@@ -369,6 +408,59 @@ func TestStreamStderrError(t *testing.T) {
 	err = fbs.Stream(ctx, attachIO, t.Logf)
 	if err == nil {
 		t.Error("Expected error from Stream, got nil")
+	}
+}
+
+func TestStreamStdinDisabled(t *testing.T) {
+	// Create FilesBasedStreams with allocateStdin set to false (stdin streaming disabled)
+	fbs := setupFilesBasedStreams(t, false, false) // allocateStdin = false, allocateTTY = false
+	defer teardownFilesBasedStreams(t, fbs)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Prepare mock attachIO with stdin provided
+	stdinBuf := bytes.NewBufferString("Test input data")
+	attachIO := &MockAttachIO{
+		stdin: stdinBuf,
+	}
+
+	// Attempt to start streaming
+	err := fbs.Stream(ctx, attachIO, t.Logf)
+
+	// Check for the expected error
+	if err == nil {
+		t.Error("Expected error when stdin streaming is disabled, but got nil")
+	} else if !strings.Contains(err.Error(), "stdin streaming is disabled") {
+		t.Errorf("Expected error 'stdin streaming is disabled', but got: %v", err)
+	} else {
+		t.Logf("Received expected error: %v", err)
+	}
+}
+
+func TestStreamTTYDisabled(t *testing.T) {
+	// Create FilesBasedStreams with allocateTTY set to false (TTY is disabled)
+	fbs := setupFilesBasedStreams(t, false, false) // allocateStdin = false, allocateTTY = false
+	defer teardownFilesBasedStreams(t, fbs)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Prepare mock attachIO with TTY set to true
+	attachIO := &MockAttachIO{
+		tty: true,
+	}
+
+	// Attempt to start streaming
+	err := fbs.Stream(ctx, attachIO, t.Logf)
+
+	// Check for the expected error
+	if err == nil {
+		t.Error("Expected error when TTY is disabled, but got nil")
+	} else if !strings.Contains(err.Error(), "TTY is disabled") {
+		t.Errorf("Expected error 'TTY is disabled', but got: %v", err)
+	} else {
+		t.Logf("Received expected error: %v", err)
 	}
 }
 

@@ -10,11 +10,17 @@ package fugaci_test
 */
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"io"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/remotecommand"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,7 +39,11 @@ type PodTestCase struct {
 }
 
 func TestProviderE2E(t *testing.T) {
-	config, err := clientcmd.BuildConfigFromFlags("", clientcmd.RecommendedHomeFile)
+	kubeconfigPath := os.Getenv("KUBECONFIG")
+	if kubeconfigPath == "" {
+		kubeconfigPath = clientcmd.RecommendedHomeFile
+	}
+	config, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
 	if err != nil {
 		t.Fatalf("Failed to build kubeconfig: %v", err)
 	}
@@ -81,7 +91,7 @@ func TestProviderE2E(t *testing.T) {
 			assertions: func(t *testing.T, clientset *kubernetes.Clientset, config *rest.Config, pods []*v1.Pod) {
 				p := pods[0]
 				logs := getContainerLogs(t, clientset, testNamespace, p.Name, "curie3")
-				assert.Contains(t, logs, "spec.image=ghcr.io/macvmio/macos-sonoma:14.5-agent-v1.6")
+				assert.Contains(t, logs, "spec.image=ghcr.io/macvmio/macos-sonoma:14.5-agent-v1.7")
 				assert.Contains(t, logs, "action=pulling")
 			},
 		},
@@ -108,7 +118,7 @@ func TestProviderE2E(t *testing.T) {
 
 				assert.Contains(t, logs, "spec.image=ghcr.io/macvmio/macos-sonoma:14.5-agent-v1.6")
 				assert.Contains(t, logs, "action=pulling")
-				assert.Contains(t, logs, "imageID=sha256:08bbe35549962a2aef9e79631f93c43a245aa662674cb88298be518aabbaed32")
+				assert.Contains(t, logs, "imageID=sha256:5e21ef1cd7e667ba8581f2df7bb292b7db23bc62df7137d3a1fa5790a57d3260")
 				assert.Contains(t, logs, "state=created")
 				assert.Contains(t, logs, "state=SSHReady")
 				assert.Contains(t, logs, "action=stop")
@@ -131,6 +141,100 @@ func TestProviderE2E(t *testing.T) {
 				assert.NotContains(t, stdout, "FUGACI_SSH_PASSWORD")
 				assert.NotContains(t, stdout, "FUGACI_SSH_USERNAME")
 				assert.Empty(t, stderr, "Stderr should be empty")
+			},
+		},
+		{
+			name:       "TestAttachWithStdoutAndStderr",
+			podFiles:   []string{"pod6-attach-stdout.yaml"},
+			postCreate: waitForPodConditionReady,
+			assertions: func(t *testing.T, clientset *kubernetes.Clientset, config *rest.Config, pods []*v1.Pod) {
+				pod := pods[0]
+				ctx, cancel := context.WithCancel(context.Background())
+				stdoutReader, stdoutWriter := io.Pipe()
+				defer stdoutWriter.Close()
+				outputChan := make(chan string, 100)
+				go func() {
+					defer close(outputChan)
+					scanner := bufio.NewScanner(stdoutReader)
+					for scanner.Scan() {
+						line := scanner.Text()
+						outputChan <- line
+						if strings.Contains(line, "counter-5") {
+							cancel() // Cancel the context once the line is found
+							return
+						}
+					}
+					if err := scanner.Err(); err != nil {
+						t.Errorf("Error scanning output: %v", err)
+					}
+				}()
+				// This blocks until stream is completed - it's when context is cancelled
+				err = attachStreamToPod(t, clientset, config, testNamespace, pod.Name,
+					&v1.PodAttachOptions{
+						Stdin:  false,
+						Stdout: true,
+						Stderr: true,
+						TTY:    false,
+					},
+					ctx,
+					remotecommand.StreamOptions{
+						Stdout: stdoutWriter,
+						Stderr: stdoutWriter,
+						Tty:    false,
+					})
+				// Collect and validate output
+				var capturedOutput []string
+				for line := range outputChan {
+					capturedOutput = append(capturedOutput, line)
+				}
+
+				// Assertions for stdout
+				assert.Contains(t, strings.Join(capturedOutput, "\n"), "counter-1")
+				assert.Contains(t, strings.Join(capturedOutput, "\n"), "counter-2")
+				assert.Contains(t, strings.Join(capturedOutput, "\n"), "counter-3")
+				assert.Contains(t, strings.Join(capturedOutput, "\n"), "counter-4")
+				assert.Contains(t, strings.Join(capturedOutput, "\n"), "counter-5")
+			},
+		},
+		{
+			name:       "TestAttachWithStdinAndTTY",
+			podFiles:   []string{"pod7-attach-stdin-auto.yaml"},
+			postCreate: waitForPodConditionReady,
+			assertions: func(t *testing.T, clientset *kubernetes.Clientset, config *rest.Config, pods []*v1.Pod) {
+				pod := pods[0]
+				// Use io.Pipe for stdin to control when to close
+				stdinReader, stdinWriter := io.Pipe()
+				stdout := &bytes.Buffer{}
+				ctx := context.Background()
+
+				// Prepare input
+				input := "Hello, pod!"
+				go func() {
+					defer stdinWriter.Close()
+					_, err := stdinWriter.Write([]byte(input))
+					require.NoError(t, err)
+					time.Sleep(200 * time.Millisecond)
+					// Close stdinWriter to signal EOF to the remote process
+				}()
+
+				// This blocks until stream is completed. In this case when stdin is closed
+				err = attachStreamToPod(t, clientset, config, testNamespace, pod.Name,
+					&v1.PodAttachOptions{
+						Stdin:  true,
+						Stdout: true,
+						Stderr: false, // Must be false when TTY is true
+						TTY:    true,
+					},
+					ctx,
+					remotecommand.StreamOptions{
+						Stdin:  stdinReader,
+						Stdout: stdout,
+						Tty:    true,
+					})
+				require.NoError(t, err)
+
+				output := stdout.String()
+				assert.Contains(t, output, input, "The output should contain the input sent via stdin")
 			},
 		},
 		//{

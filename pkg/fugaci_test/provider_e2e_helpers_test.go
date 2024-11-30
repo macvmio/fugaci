@@ -17,13 +17,14 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
 
-const testNamespace = "jenkins"
+const testNamespace = "default"
 
 func createPodFromYAML(clientset *kubernetes.Clientset, fileName string) (*v1.Pod, error) {
 	podYAML, err := os.ReadFile(filepath.Join("testdata", fileName))
@@ -126,13 +127,26 @@ func execCommandInPod(t *testing.T, clientset *kubernetes.Clientset, config *res
 	exec, err := remotecommand.NewSPDYExecutor(config, "POST", req.URL())
 	require.NoError(t, err, "error creating executor")
 	var stdout, stderr bytes.Buffer
-
-	err = exec.Stream(remotecommand.StreamOptions{
+	ctx := context.Background()
+	err = exec.StreamWithContext(ctx, remotecommand.StreamOptions{
 		Stdout: &stdout,
 		Stderr: &stderr,
 	})
 	require.NoError(t, err, "error executing command: %v", command)
 	return stdout.String(), stderr.String()
+}
+func attachStreamToPod(t *testing.T, clientset *kubernetes.Clientset, config *rest.Config, namespace, podName string,
+	attachOptions *v1.PodAttachOptions, ctx context.Context, streamOptions remotecommand.StreamOptions) error {
+	req := clientset.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Namespace(namespace).
+		Name(podName).
+		SubResource("attach").
+		VersionedParams(attachOptions, scheme.ParameterCodec)
+
+	exec, err := remotecommand.NewSPDYExecutor(config, http.MethodPost, req.URL())
+	require.NoError(t, err)
+	return exec.StreamWithContext(ctx, streamOptions)
 }
 
 func generateRandomName(baseName string) string {

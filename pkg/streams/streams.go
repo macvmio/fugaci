@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/macvmio/fugaci/pkg/ctxio"
+	"github.com/virtual-kubelet/virtual-kubelet/errdefs"
 	"github.com/virtual-kubelet/virtual-kubelet/node/api"
 	"golang.org/x/sync/errgroup"
 	"io"
@@ -109,6 +110,12 @@ func (f *FilesBasedStreams) Close() error {
 }
 
 func (f *FilesBasedStreams) Stream(ctx context.Context, attach api.AttachIO, loggerPrintf func(format string, v ...any)) error {
+	if attach.Stdin() != nil && f.stdinReader == nil {
+		return errdefs.InvalidInput("stdin streaming is disabled")
+	}
+	if attach.TTY() && !f.allocateTTY {
+		return errdefs.InvalidInput("TTY is disabled")
+	}
 	// Create an errgroup with the provided context
 	eg, ctx := errgroup.WithContext(ctx)
 
@@ -142,6 +149,12 @@ func (f *FilesBasedStreams) Stream(ctx context.Context, attach api.AttachIO, log
 			// TODO: This blocks until if stdin has no data, even if context is cancelled
 			_, err := io.Copy(f.stdinWriter, attach.Stdin())
 			loggerPrintf("stdin copy completed: %v", err)
+			eg.Go(func() error {
+				if err == nil {
+					return io.EOF
+				}
+				return err
+			})
 		}()
 	}
 
@@ -172,6 +185,10 @@ func (f *FilesBasedStreams) Stream(ctx context.Context, attach api.AttachIO, log
 
 	loggerPrintf("waiting for Stream() to finish")
 	err := eg.Wait()
+	if errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) {
+		loggerPrintf("Stream() ignoring expected error: %v", err)
+		err = nil
+	}
 	loggerPrintf("Stream() has completed")
 	return err
 }
