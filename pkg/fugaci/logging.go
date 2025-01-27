@@ -3,12 +3,19 @@ package fugaci
 import (
 	"context"
 	io_prometheus_client "github.com/prometheus/client_model/go"
+	vknode "github.com/virtual-kubelet/virtual-kubelet/node"
 	"github.com/virtual-kubelet/virtual-kubelet/node/api"
 	"github.com/virtual-kubelet/virtual-kubelet/node/api/statsv1alpha1"
+	"github.com/virtual-kubelet/virtual-kubelet/node/nodeutil"
 	"io"
 	v1 "k8s.io/api/core/v1"
 	"log"
 )
+
+var _ vknode.PodLifecycleHandler = (*LoggingProvider)(nil)
+
+var _ vknode.PodNotifier = (*LoggingProvider)(nil)
+var _ nodeutil.Provider = (*LoggingProvider)(nil)
 
 // LoggingProvider wraps an existing Provider and logs the responses
 type LoggingProvider struct {
@@ -150,4 +157,8 @@ func (lp *LoggingProvider) PortForward(ctx context.Context, namespace, pod strin
 		log.Printf("PortForward succeeded for Pod %s/%s, Port %d", namespace, pod, port)
 	}
 	return err
+}
+
+func (lp *LoggingProvider) NotifyPods(ctx context.Context, cb func(*v1.Pod)) {
+	lp.UnderlyingProvider.NotifyPods(ctx, cb)
 }

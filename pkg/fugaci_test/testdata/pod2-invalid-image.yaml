@@ -4,7 +4,7 @@ metadata:
   name: testpod2
 spec:
   containers:
-    - image: ghcr.com/invalid/image:123
+    - image: ghcr.io/invalid/image:123
       imagePullPolicy: IfNotPresent
       command: [ "sleep", "1000000" ]
       name: curie3

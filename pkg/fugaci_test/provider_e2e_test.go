@@ -76,7 +76,7 @@ func TestProviderE2E(t *testing.T) {
 			assertions: func(t *testing.T, clientset *kubernetes.Clientset, config *rest.Config, pods []*v1.Pod) {
 				p := pods[0]
 				logs := getContainerLogs(t, clientset, testNamespace, p.Name, "curie3")
-				assert.Contains(t, logs, "err=\"pull image: GET https://ghcr.com/v2/invalid/image/manifests/123: unexpected status code 404 Not Found")
+				assert.Contains(t, logs, "err=\"pull image: GET https://ghcr.io/token?scope=repository%3Ainvalid%2Fimage%3Apull&service=ghcr.io: DENIED: denied")
 
 				containerStatus := p.Status.ContainerStatuses[0]
 				assert.False(t, containerStatus.Ready)

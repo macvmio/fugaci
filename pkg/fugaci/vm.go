@@ -80,6 +80,8 @@ type VM struct {
 	streams   *streams.FilesBasedStreams
 	logger    *log.Logger
 	storyLine *storyline.StoryLine
+
+	onPodUpdated func(p *v1.Pod)
 }
 
 func NewVM(ctx context.Context,
@@ -89,7 +91,8 @@ func NewVM(ctx context.Context,
 	portForwarder PortForwarder,
 	containerLogsDirectory string,
 	pod *v1.Pod,
-	containerIndex int) (*VM, error) {
+	containerIndex int,
+	onPodUpdated func(p *v1.Pod)) (*VM, error) {
 	if containerIndex < 0 || containerIndex >= len(pod.Spec.Containers) {
 		return nil, errors.New("invalid container index")
 	}
@@ -143,6 +146,8 @@ func NewVM(ctx context.Context,
 		streams:   fileStreams,
 		logger:    customLogger,
 		storyLine: storyline.New(),
+
+		onPodUpdated: onPodUpdated,
 	}
 	vm.containerIndex.Store(int32(containerIndex))
 	return vm, nil
@@ -395,22 +400,26 @@ func (s *VM) Run() {
 		s.storyLine.Add("streamsClosingErr", err)
 	}
 	s.logger.Printf("container '%v' finished successfully: %v, exit code=%d\n", containerID, runCmd, runCmd.ProcessState.ExitCode())
-	s.safeUpdateState(v1.ContainerState{Terminated: &v1.ContainerStateTerminated{
+	terminatedContainerState := v1.ContainerState{Terminated: &v1.ContainerStateTerminated{
 		ExitCode:    int32(runCmd.ProcessState.ExitCode()),
-		Reason:      "exited successfully",
+		Reason:      "Succeeded",
 		Message:     runCmd.ProcessState.String(),
 		StartedAt:   startedAt,
 		FinishedAt:  metav1.Now(),
 		ContainerID: s.GetContainerStatus().ContainerID,
-	}})
+	}}
+	// Keep it a single call
 	s.safeUpdatePod(func(pod *v1.Pod) {
+		pod.Status.ContainerStatuses[s.containerIndex.Load()].State = terminatedContainerState
+		pod.Status.ContainerStatuses[s.containerIndex.Load()].Ready = false
 		pod.Status.Phase = v1.PodSucceeded
+		pod.Status.Conditions = make([]v1.PodCondition, 0)
 	})
 	s.vmCancelFunc(nil)
 }
 
 func (s *VM) startContainer(containerID string, initTime time.Time) (*exec.Cmd, metav1.Time, error) {
-	s.safeUpdateState(v1.ContainerState{Waiting: &v1.ContainerStateWaiting{Reason: "starting"}})
+	s.safeUpdateState(v1.ContainerState{Waiting: &v1.ContainerStateWaiting{Reason: "Starting"}})
 	runCmd, err := s.virt.Start(s.vmLifetimeCtx, containerID)
 	if err != nil {
 		err2 := s.virt.Destroy(s.vmLifetimeCtx, containerID)
@@ -593,6 +602,9 @@ func (s *VM) safeGetPod() *v1.Pod {
 
 func (s *VM) safeUpdatePod(update func(pod *v1.Pod)) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	update(s.pod)
+	podCopy := s.pod.DeepCopy()
+	s.mu.Unlock()
+
+	go s.onPodUpdated(podCopy)
 }
