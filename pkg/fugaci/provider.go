@@ -9,7 +9,6 @@ import (
 	"github.com/macvmio/fugaci/pkg/portforwarder"
 	"github.com/macvmio/fugaci/pkg/sshrunner"
 	io_prometheus_client "github.com/prometheus/client_model/go"
-	"github.com/virtual-kubelet/node-cli/manager"
 	"github.com/virtual-kubelet/virtual-kubelet/errdefs"
 	vknode "github.com/virtual-kubelet/virtual-kubelet/node"
 	"github.com/virtual-kubelet/virtual-kubelet/node/api"
@@ -29,11 +28,10 @@ var __ nodeutil.Provider = (*Provider)(nil)
 var ErrNotImplemented = errors.New("not implemented")
 
 type Provider struct {
-	appContext      context.Context
-	resourceManager *manager.ResourceManager
-	cfg             Config
-	virt            *curie.Virtualization
-	puller          Puller
+	appContext context.Context
+	cfg        Config
+	virt       *curie.Virtualization
+	puller     Puller
 
 	// Mutex to synchronize access to the in-memory store.
 	mu sync.Mutex
