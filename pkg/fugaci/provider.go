@@ -23,7 +23,8 @@ import (
 )
 
 var _ vknode.PodLifecycleHandler = (*Provider)(nil)
-var __ nodeutil.Provider = (*Provider)(nil)
+var _ vknode.PodNotifier = (*Provider)(nil)
+var _ nodeutil.Provider = (*Provider)(nil)
 
 var ErrNotImplemented = errors.New("not implemented")
 
@@ -37,6 +38,8 @@ type Provider struct {
 	mu sync.Mutex
 	// In-memory store for Pods.
 	vms [2]*VM
+
+	notifyPodsCallback func(p *v1.Pod)
 }
 
 func NewProvider(appCtx context.Context, cfg Config) (*LoggingProvider, error) {
@@ -46,6 +49,9 @@ func NewProvider(appCtx context.Context, cfg Config) (*LoggingProvider, error) {
 		virt:       curie.NewVirtualization(cfg.CurieVirtualization.BinaryPath, cfg.CurieVirtualization.DataRootPath),
 		cfg:        cfg,
 		vms:        [2]*VM{},
+		notifyPodsCallback: func(p *v1.Pod) {
+			log.Printf("notifyPodsCallback is not configured")
+		},
 	}), nil
 }
 
@@ -63,7 +69,7 @@ func (s *Provider) allocateVM(pod *v1.Pod) (*VM, error) {
 		vm, err := NewVM(s.appContext, s.virt, s.puller,
 			sshrunner.NewRunner(), portforwarder.NewPortForwarder(),
 			s.cfg.ContainerLogsDirectory,
-			pod, 0)
+			pod, 0, s.notifyPodsCallback)
 		if err != nil {
 			return nil, err
 		}
@@ -169,7 +175,6 @@ func (s *Provider) DeletePod(ctx context.Context, pod *v1.Pod) error {
 	if err != nil {
 		return fmt.Errorf("cleanup of VM for pod '%s/%s' failed: %w", pod.Namespace, pod.Name, err)
 	}
-
 	return s.deallocateVM(vm)
 }
 
@@ -190,15 +195,15 @@ func (s *Provider) GetPods(ctx context.Context) ([]*v1.Pod, error) {
 	return []*v1.Pod{}, nil
 }
 
+func (s *Provider) NotifyPods(ctx context.Context, cb func(*v1.Pod)) {
+	fmt.Printf("NotifyPods called\n")
+	s.notifyPodsCallback = cb
+}
+
 func (s *Provider) ConfigureNode(ctx context.Context, fugaciVersion string, node *v1.Node) error {
 	n := NewNode(fugaciVersion, s.cfg)
 	return n.Configure(node)
 }
-
-// TODO(tjarosik):
-//func (s *Provider) NotifyPods(ctx context.Context, cb func(*v1.Pod)) {
-//	log.Printf("Notifying pods on node %s", s.nodeName)
-//}
 
 func (s *Provider) GetContainerLogs(ctx context.Context, namespace, podName, containerName string, opts api.ContainerLogOpts) (io.ReadCloser, error) {
 	// Return a simple static log line

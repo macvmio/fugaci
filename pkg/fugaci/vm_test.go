@@ -142,7 +142,8 @@ func setupCommonTestVM(t *testing.T, podOverride func(*v1.Pod)) (*VM, *MockVirtu
 	}
 	podOverride(pod)
 
-	vm, err := NewVM(context.Background(), mockVirt, mockPuller, mockSSHRunner, mockPortFortwarder, t.TempDir(), pod, 0)
+	callbackFunc := func(p *v1.Pod) {}
+	vm, err := NewVM(context.Background(), mockVirt, mockPuller, mockSSHRunner, mockPortFortwarder, t.TempDir(), pod, 0, callbackFunc)
 	require.NoError(t, err)
 	require.NotNil(t, vm)
 
@@ -275,7 +276,7 @@ func TestVM_Run_Successful_ifContainerIDProvided_mustRestart(t *testing.T) {
 	assert.Equal(t, "containerid-123", status.ContainerID)
 	assert.Equal(t, int32(0), status.State.Terminated.ExitCode)
 	assert.Equal(t, "exit status 0", status.State.Terminated.Message)
-	assert.Equal(t, "exited successfully", status.State.Terminated.Reason)
+	assert.Equal(t, "Succeeded", status.State.Terminated.Reason)
 	assert.NotEmpty(t, status.State.Terminated.StartedAt)
 	assert.NotEmpty(t, status.State.Terminated.FinishedAt)
 
@@ -314,7 +315,7 @@ func TestVM_Run_Successful_mustBeReadyWithIPAddress(t *testing.T) {
 	assert.Equal(t, "containerid-123", status.ContainerID)
 	assert.Equal(t, int32(0), status.State.Terminated.ExitCode)
 	assert.Equal(t, "exit status 0", status.State.Terminated.Message)
-	assert.Equal(t, "exited successfully", status.State.Terminated.Reason)
+	assert.Equal(t, "Succeeded", status.State.Terminated.Reason)
 	assert.NotEmpty(t, status.State.Terminated.StartedAt)
 	assert.NotEmpty(t, status.State.Terminated.FinishedAt)
 
@@ -365,7 +366,7 @@ func TestVM_Run_Successful_mustRunContainerCommandThroughSSH(t *testing.T) {
 	assert.Equal(t, "containerid-123", status.ContainerID)
 	assert.Equal(t, int32(0), status.State.Terminated.ExitCode)
 	assert.Equal(t, "exit status 0", status.State.Terminated.Message)
-	assert.Equal(t, "exited successfully", status.State.Terminated.Reason)
+	assert.Equal(t, "Succeeded", status.State.Terminated.Reason)
 	assert.NotEmpty(t, status.State.Terminated.StartedAt)
 	assert.NotEmpty(t, status.State.Terminated.FinishedAt)
 
@@ -466,7 +467,7 @@ func TestVM_Run_Successful_CleanupMustBeIdempotent(t *testing.T) {
 	assert.Equal(t, "containerid-123", status.ContainerID)
 	assert.Equal(t, int32(0), status.State.Terminated.ExitCode)
 	assert.Equal(t, "exit status 0", status.State.Terminated.Message)
-	assert.Equal(t, "exited successfully", status.State.Terminated.Reason)
+	assert.Equal(t, "Succeeded", status.State.Terminated.Reason)
 	assert.NotEmpty(t, status.State.Terminated.StartedAt)
 	assert.NotEmpty(t, status.State.Terminated.FinishedAt)
 
