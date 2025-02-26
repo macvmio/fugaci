@@ -3,7 +3,7 @@
 Fugaci is a Kubernetes-based system for serving ephemeral macOS virtual machines (VMs). It integrates seamlessly with Kubernetes, allowing macOS-specific workflows to be managed through standard Kubernetes APIs (`kubectl`). Fugaci presents itself as a Kubernetes node with specific taints, enabling it to run macOS workloads while not interfering with standard Linux container workflows.
 
 #### Demo
-[![Demo](https://img.youtube.com/vi/aGeZCoI_Sy4/maxresdefault.jpg)](https://www.youtube.com/watch?v=aGeZCoI_Sy4)
+[![Demo](https://img.youtube.com/vi/aNRD9s1ACAo/maxresdefault.jpg)](https://www.youtube.com/watch?v=aNRD9s1ACAo)
 
 #### Integration with Jenkins
 [![Watch the video](https://img.youtube.com/vi/DbzaP82zl7c/maxresdefault.jpg)](https://www.youtube.com/watch?v=DbzaP82zl7c)
