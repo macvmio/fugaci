@@ -55,7 +55,7 @@ On a separate machine (or a VM that will act as your Kubernetes master), install
 export FUGACI_K3S_SERVER_IP_ADDRESS="192.168.1.100"
 
 # Install k3s
-curl -sfL [https://get.k3s.io](https://get.k3s.io) | INSTALL_K3S_EXEC="server \
+curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="server \
   --tls-san ${FUGACI_K3S_SERVER_IP_ADDRESS:?err} \
   --disable traefik \
   --disable-kube-proxy \
