@@ -68,16 +68,8 @@ After `k3s` is installed, it will create a configuration file at `/etc/rancher/k
 
 #### 3\. Download Fugaci and Curie
 
-On your macOS host, download the latest release of Fugaci and install the `curie` binary.
+On your macOS host, download the latest release of Fugaci and install the `curie` binary. https://github.com/macvmio/fugaci/releases/tag/v0.6.0
 
-```bash
-# Download Fugaci from the latest release
-curl -L -o /usr/local/bin/fugaci [https://github.com/macvmio/fugaci/releases/latest/download/fugaci](https://github.com/macvmio/fugaci/releases/latest/download/fugaci)
-chmod +x /usr/local/bin/fugaci
-
-# Make sure 'curie' is also installed, for example in /usr/local/bin/
-# (Refer to the curie project for installation instructions)
-```
 
 #### 4\. Generate Security Certificates
 
@@ -85,7 +77,7 @@ For your Mac node (let's call it `m1`) to securely join the cluster, it needs a 
 
 ```bash
 # Clone the Fugaci repo to get the helper script
-git clone [https://github.com/macvmio/fugaci.git](https://github.com/macvmio/fugaci.git)
+git clone https://github.com/macvmio/fugaci
 cd fugaci
 
 # Run the script from inside the repo with your node name and its IP address
