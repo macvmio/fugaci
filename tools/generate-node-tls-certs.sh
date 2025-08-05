@@ -8,12 +8,12 @@ IP_ADDRESS=$2
 
 # Validate Parameters
 if [ -z "$NODE_NAME" ] || [ -z "$IP_ADDRESS" ]; then
-  echo "Usage: $0 <Node Name> <IP Address> <Config JSON Output File>"
+  echo "Usage: $0 <Node Name> <IP Address>"
   exit 1
 fi
 
 
-
+echo "KUBECONFIG is set to ${KUBECONFIG-:none}"
 # Variables
 PROFILE="kubelet"  # Name of the profile to use in CSR generation
 CONFIG_JSON="kubelet-csr.json"  # CSR configuration file
