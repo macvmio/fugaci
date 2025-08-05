@@ -35,7 +35,7 @@ To run Fugaci, you need the following setup:
 1. **Run the Script**:
 Run the script using the following command:
 ```sh
-	go run tools/localdevenv
+	go run ./tools/localdevenv
 ```
 
 2. Start Fugaci on MacOS node with config from ~/.fugaci/devenv-k3s/fugaci-config.yaml

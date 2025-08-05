@@ -1,6 +1,8 @@
 ![Fugaci](resources/fugaci-logo.png)
 
-Fugaci is a Kubernetes-based system for serving ephemeral macOS virtual machines (VMs). It integrates seamlessly with Kubernetes, allowing macOS-specific workflows to be managed through standard Kubernetes APIs (`kubectl`). Fugaci presents itself as a Kubernetes node with specific taints, enabling it to run macOS workloads while not interfering with standard Linux container workflows.
+Fugaci is a tool that lets you run temporary macOS virtual machines (VMs) inside a Kubernetes cluster. Think of it as a bridge that connects the world of macOS applications with the powerful automation of Kubernetes.
+
+Normally, Kubernetes is used for managing Linux containers. Fugaci extends this capability, allowing you to manage macOS workloads using the same familiar Kubernetes tools, like `kubectl`. It cleverly makes a Mac computer appear as a special "node" in your Kubernetes cluster, ready to run macOS-specific tasks.
 
 #### Demo
 [![Demo](https://img.youtube.com/vi/aNRD9s1ACAo/maxresdefault.jpg)](https://www.youtube.com/watch?v=aNRD9s1ACAo)
@@ -8,90 +10,140 @@ Fugaci is a Kubernetes-based system for serving ephemeral macOS virtual machines
 #### Integration with Jenkins
 [![Watch the video](https://img.youtube.com/vi/DbzaP82zl7c/maxresdefault.jpg)](https://www.youtube.com/watch?v=DbzaP82zl7c)
 
-## A Building Block for macOS workflows
+---
 
-Fugaci is designed as a foundational building block rather than a complete out-of-the-box solution.
-Just as Kubernetes provides a platform for orchestrating containers upon which complex systems are built,
-Fugaci offers the missing piece for managing ephemeral macOS virtual machines within Kubernetes. 
-This allows developers and system architects to build customized workflows and higher-level solutions
-tailored to their specific macOS deployment needs.
+## A Building Block for macOS Workflows
 
+Fugaci is designed to be a fundamental component, not a complete, all-in-one solution. Just as Kubernetes provides a powerful platform for building complex containerized systems, Fugaci provides the missing piece for managing temporary macOS environments within that platform. This allows developers and DevOps engineers to create custom, automated workflows for their specific macOS needs, such as building and testing iOS or macOS applications.
+
+---
 
 ## Status
 
-**Experimental**: Fugaci is currently experimental and not recommended for production use. However, it has been successfully used to run thousands of VMs over multiple days with continuous integration systems.
+**🧪 Experimental**: Fugaci is currently in an experimental phase and is not recommended for production environments. However, it has been successfully used to run thousands of VMs for continuous integration (CI) purposes over several days.
+
+---
 
 ## Features
 
-- **Ephemeral macOS VMs**: Run macOS VMs that are created and destroyed as needed, optimizing resource utilization.
-- **Kubernetes Integration**: Manage macOS VMs using standard Kubernetes commands and APIs.
-- **Taint-Based Scheduling**: Use Kubernetes taints to control workload placement on macOS nodes.
-- **Single Binary Distribution**: Easy deployment with a single Go binary.
+-   **Ephemeral macOS VMs**: Automatically create and destroy macOS virtual machines as needed. This is great for one-off tasks like builds or tests, as it saves resources.
+-   **Kubernetes Integration**: Manage your macOS VMs using the standard Kubernetes commands and tools you already know.
+-   **Smart Scheduling**: Fugaci uses a Kubernetes feature called "taints" to ensure that only macOS-specific workloads are scheduled to run on your Mac hardware.
+-   **Simple Deployment**: It's easy to install and run, distributed as a single file.
+
+---
 
 ## Getting Started
 
 ### Prerequisites
 
-- **macOS Host**: Fugaci runs as a daemon on macOS and assumes it is the only virtualization software running on the node.
-- **Curie Binary**: Fugaci depends on the "curie" binary to be present on the system.
-- **Kubernetes Cluster**: An existing Kubernetes cluster with access to the kubeconfig file.
-- **TLS Certificates**: TLS key and certificate files for secure communication (can be generated using Kubernetes CSR).
+Before you begin, you'll need the following:
+
+-   **A macOS Host**: Fugaci needs to be installed on a Mac computer (like a Mac mini or Mac Studio). It's best if this machine is dedicated to running Fugaci, without other virtualization software like Docker Desktop or Parallels.
+-   **Curie Binary**: Fugaci uses a separate tool called "[curie](https://github.com/macvmio/curie)" to handle the virtualization. You'll need to have this installed on your macOS host.
+-   **A Kubernetes Cluster**: You need an existing Kubernetes cluster. The guide below shows how to set up a simple `k3s` (a lightweight Kubernetes distribution) cluster for this purpose.
+-   **TLS Certificates**: For secure communication between Fugaci and the Kubernetes cluster, you'll need TLS security certificates. The instructions below cover how to generate these.
 
 ### Installation
 
-1. **Download Fugaci**:
+#### 1. Set Up a Lightweight Kubernetes Cluster (k3s)
 
-   Download the latest release of Fugaci from the [GitHub releases page](https://github.com/macvmio/fugaci/releases):
+On a separate machine (or a VM that will act as your Kubernetes master), install `k3s`. You'll need to provide an IP address that your Fugaci node can use to communicate with it.
 
-   ```bash
-   curl -L -o /usr/local/bin/fugaci https://github.com/macvmio/fugaci/releases/latest/download/fugaci
-   chmod +x /usr/local/bin/fugaci
-   ```
+```bash
+# Replace with the IP address of your k3s server
+export FUGACI_K3S_SERVER_IP_ADDRESS="192.168.1.100"
 
-2. **Install Curie**:
+# Install k3s
+curl -sfL [https://get.k3s.io](https://get.k3s.io) | INSTALL_K3S_EXEC="server \
+  --tls-san ${FUGACI_K3S_SERVER_IP_ADDRESS:?err} \
+  --disable traefik \
+  --disable-kube-proxy \
+  --egress-selector-mode disabled" sh -
+````
 
-   Ensure the "curie" binary is installed and available at the specified path in the configuration.
+#### 2\. Configure `kubectl`
 
-3. **Configure Fugaci**:
+After `k3s` is installed, it will create a configuration file at `/etc/rancher/k3s/k3s.yaml`. Copy this file to your local machine, and edit it to replace the server IP address `127.0.0.1` with the `${FUGACI_K3S_SERVER_IP_ADDRESS}` you used above. This file allows `kubectl` to connect to your new cluster.
 
-   Create a configuration file (e.g., `/etc/fugaci/config.yaml`) with the following content:
+#### 3\. Download Fugaci and Curie
 
-   ```yaml
-   nodeName: mac-m1
-   kubeConfigPath: /Users/your_username/.kube/config
-   containerLogsDirectory: /var/logs/fugaci 
-   curieVirtualization:
-     binaryPath: /usr/local/bin/curie
-     dataRootPath: /Users/your_username/.curie
-   internalIP: 192.168.1.99
+On your macOS host, download the latest release of Fugaci and install the `curie` binary.
 
-   TLS:
-     # These can be generated with Kubernetes CSR
-     keyPath: /Users/your_username/.fugaci/mac-m1.key
-     certPath: /Users/your_username/.fugaci/mac-m1.crt
-     # This can be taken from the kubeconfig's certificate-authority-data
-     certificateAuthorityPath: /Users/your_username/.kube/ca.pem
-   ```
+```bash
+# Download Fugaci from the latest release
+curl -L -o /usr/local/bin/fugaci [https://github.com/macvmio/fugaci/releases/latest/download/fugaci](https://github.com/macvmio/fugaci/releases/latest/download/fugaci)
+chmod +x /usr/local/bin/fugaci
 
-   **Note**: Replace `/Users/your_username` with your actual user directory and ensure all paths point to the correct locations on your system.
+# Make sure 'curie' is also installed, for example in /usr/local/bin/
+# (Refer to the curie project for installation instructions)
+```
 
-4. **Bootstrap Fugaci Daemon**:
+#### 4\. Generate Security Certificates
 
-   Bootstrap and start the Fugaci daemon using the following command:
+For your Mac node (let's call it `m1`) to securely join the cluster, it needs a key and certificate. A helper script is provided in the [Fugaci repository](https://www.google.com/search?q=https://github.com/macvmio/fugaci) to make this easy.
 
-   ```bash
-   sudo /usr/local/bin/fugaci daemon bootstrap
-   ```
+```bash
+# Clone the Fugaci repo to get the helper script
+git clone [https://github.com/macvmio/fugaci.git](https://github.com/macvmio/fugaci.git)
+cd fugaci
 
-   This command installs the Fugaci daemon with a `.plist` file for macOS `launchd`, ensuring that Fugaci runs as a background service.
+# Run the script from inside the repo with your node name and its IP address
+./tools/generate-node-tls-certs.sh m1 <Fugaci Node IP address>
+```
+
+This will create `m1-crt.pem` and `m1-key.pem`. You will also need to copy the cluster's certificate authority file, located at `/var/lib/rancher/k3s/agent/client-ca.crt` on your `k3s` server, to your Fugaci node.
+
+#### 5\. Configure Fugaci
+
+Create a configuration file for Fugaci at `/etc/fugaci/config.yaml`. This file tells Fugaci where to find everything it needs.
+
+```yaml
+# A unique name for your Mac node in the Kubernetes cluster
+nodeName: mac-m1
+
+# Path to the kubeconfig file you configured in step 2
+kubeConfigPath: /Users/your_username/.kube/config
+
+# Where to store logs from the macOS VMs
+containerLogsDirectory: /var/logs/fugaci 
+
+# Settings for the 'curie' virtualization tool
+curieVirtualization:
+  binaryPath: /usr/local/bin/curie
+  dataRootPath: /Users/your_username/.curie
+
+# The IP address of this Mac node, must be reachable from `k3s` VM
+internalIP: 192.168.1.99
+
+# Paths to the security certificates you generated and copied
+TLS:
+  keyPath: /Users/your_username/.fugaci/m1-key.pem
+  certPath: /Users/your_username/.fugaci/m1-crt.pem
+  certificateAuthorityPath: /Users/your_username/.kube/client-ca.crt
+```
+
+**Note**: Make sure to replace `your_username` and the IP addresses with your actual information.
+
+#### 6\. Start the Fugaci Daemon
+
+Finally, bootstrap and start the Fugaci service. This command will set up Fugaci to run automatically in the background.
+
+```bash
+sudo /usr/local/bin/fugaci daemon bootstrap
+```
+
+-----
 
 ## Usage
 
-Once Fugaci is running, it registers itself as a node in your Kubernetes cluster with a specific taint to prevent standard workloads from being scheduled on it. You can schedule macOS-specific workloads by applying the appropriate tolerations in your pod specifications.
+Once Fugaci is running, your Mac will appear as a new node in your Kubernetes cluster. Fugaci applies a special **taint** to this node (`fugaci.macvm.io=true:NoSchedule`). This is a Kubernetes mechanism that prevents regular Linux workloads from being accidentally scheduled on your Mac.
+
+To run a job on the Mac node, you need to add a corresponding **toleration** to your pod's configuration. This tells Kubernetes that your pod is "aware" of the taint and is allowed to run there.
 
 ### Example: Scheduling a macOS Pod
 
-Here's a simplified example of how to schedule a macOS pod:
+Here is a simple example of a Kubernetes pod designed to run a command inside a macOS VM.
 
 ```yaml
 apiVersion: v1
@@ -99,39 +151,41 @@ kind: Pod
 metadata:
   name: macos-workload
 spec:
+  # This selector tells Kubernetes to only schedule this pod on a node
+  # that identifies as a 'darwin' (macOS) operating system.
   nodeSelector:
     kubernetes.io/os: darwin
+
+  # This toleration allows the pod to be scheduled on the Fugaci node,
+  # overriding the 'NoSchedule' taint.
   tolerations:
     - key: "fugaci.macvm.io"
       operator: "Equal"
       value: "true"
       effect: "NoSchedule"
+
   containers:
     - name: macos-container
+      # This is the macOS VM image to run.
       image: ghcr.io/macvmio/macos-sonoma:14.5-agent-v1.6
       imagePullPolicy: IfNotPresent
-      command:
-        - "/bin/bash"
-        - "-c"
-        - |
-          echo "Running macOS workload"
+      # This secret should contain SSH credentials (user/password)
+      # that allow Kubernetes to execute commands inside the VM.
       envFrom:
         - secretRef:
             name: fugaci-ssh-secret
 ```
+#### Verification
 
-**Notes**:
+You can verify by running `kubectl exec --stdin --tty macos-workload -- /bin/bash` and typing `sw_vers`
 
-- The `nodeSelector` ensures the pod is scheduled on a node with the `kubernetes.io/os: darwin` label, which Fugaci provides.
-- The `tolerations` allow the pod to be scheduled on the node with the specific taint applied by Fugaci.
-- Replace `ghcr.io/macvmio/macos-sonoma:14.5-agent-v1.6` with the appropriate macOS image for your workload.
-- The `fugaci-ssh-secret` is a reference to a Kubernetes secret containing the username and password, allowing Kubernetes to execute commands via SSH on the newly created VM.
+
+-----
 
 ## License
 
-Fugaci is licensed under the Apache License 2.0, allowing you to use, modify, and distribute the software.
-See the LICENSE file for more details.
+Fugaci is licensed under the Apache License 2.0. You are free to use, modify, and distribute the software. See the [LICENSE](https://www.google.com/search?q=LICENSE) file for more details.
 
 ## Credits
 
-Fugaci is developed and maintained by the team at [macvm.io](https://macvm.io). We appreciate contributions from the open-source community.
+Fugaci is developed and maintained by the team at [macvm.io](https://macvm.io). We welcome and appreciate contributions from the open-source community.
