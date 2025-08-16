@@ -86,7 +86,15 @@ cd fugaci
 
 This will create `m1-crt.pem` and `m1-key.pem`. You will also need to copy the cluster's certificate authority file, located at `/var/lib/rancher/k3s/agent/client-ca.crt` on your `k3s` server, to your Fugaci node.
 
-#### 5\. Configure Fugaci
+#### 5\. Add macOS VM SSH credentials for testing
+
+```
+kubectl create secret generic fugaci-ssh-secret \
+  --from-literal=FUGACI_SSH_USERNAME=agent \
+  --from-literal=FUGACI_SSH_PASSWORD=password
+```
+
+#### 6\. Configure Fugaci
 
 Create a configuration file for Fugaci at `/etc/fugaci/config.yaml`. This file tells Fugaci where to find everything it needs.
 
@@ -117,7 +125,7 @@ TLS:
 
 **Note**: Make sure to replace `your_username` and the IP addresses with your actual information.
 
-#### 6\. Start the Fugaci Daemon
+#### 7\. Start the Fugaci Daemon
 
 Finally, bootstrap and start the Fugaci service. This command will set up Fugaci to run automatically in the background.
 
